@@ -1,0 +1,1388 @@
+// app.js: the screens, navigation and everything you tap.
+import {
+  store, STATUSES, FORMATS, OWNERSHIP, COLL_COLORS, statusLabel, todayKey, dateKey, parseKey,
+  getBook, addBook, updateBook, deleteBook, findByIsbn, progressPct, pagePos, recordProgress, deleteLog,
+  addNote, updateNote, deleteNote, getCollection, addCollection, updateCollection, deleteCollection,
+  setBookCollections, collectionsOf, startSession, sessionElapsed, pauseSession, resumeSession,
+  cancelSession, finishSession,
+} from './store.js';
+import {
+  esc, icon, coverHtml, starsHtml, paintStars, fmtRating, starValueAt, ringHtml, openSheet, closeSheet,
+  closeAllSheets, sheetHead, confirmSheet, toast, fmtClock, fmtMinutes, fmtDate, plural, imageFileToDataUrl,
+} from './ui.js';
+import { byDay, streaks, speed, bookTotals, minutesOn, finishedIn, yearTotals, heatLevel } from './stats.js';
+import { searchBooks, completeResult, lookupIsbn, lookupForBook, extractIsbn, isOnline, cleanIsbn } from './lookup.js';
+import { startScanner, stopScanner, scanImageFile } from './scanner.js';
+import { loadSamples, removeSamples, hasSamples } from './sample.js';
+
+const APP_VERSION = '1.0.0';
+const view = document.getElementById('view');
+const timerBar = document.getElementById('timer-bar');
+
+const ui = {
+  lib: { q: '', status: 'all', own: 'all', format: 'all', genre: 'all', sort: 'added' },
+  cal: null,
+  aboutOpen: {},
+  navDepth: 0,
+  route: { name: 'home', id: null },
+  wakeLock: null,
+  wantWake: false,
+};
+
+// ======================================================================
+// Routing
+// ======================================================================
+function parseRoute() {
+  const parts = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
+  return { name: parts[0] || 'home', id: parts[1] ? decodeURIComponent(parts[1]) : null };
+}
+function go(hash) { if (location.hash !== hash) { ui.navDepth += 1; location.hash = hash; } }
+function back(fallback = '#/library') {
+  if (ui.navDepth > 0) { ui.navDepth -= 1; history.back(); } else { location.replace(fallback); }
+}
+window.addEventListener('hashchange', () => {
+  const prev = ui.route;
+  ui.route = parseRoute();
+  closeAllSheets();
+  render(prev.name === ui.route.name && prev.id === ui.route.id);
+});
+
+let renderQueued = false;
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; render(true); });
+}
+
+function render(keepScroll = false) {
+  const y = window.scrollY;
+  const { name, id } = ui.route;
+  let html = '';
+  switch (name) {
+    case 'home': html = viewHome(); break;
+    case 'library': html = viewLibrary(); break;
+    case 'book': html = viewBook(id); break;
+    case 'collections': html = viewCollections(); break;
+    case 'collection': html = viewCollection(id); break;
+    case 'stats': html = viewStats(); break;
+    case 'settings': html = viewSettings(); break;
+    case 'timer': html = viewTimer(); break;
+    default: html = viewHome();
+  }
+  view.innerHTML = html;
+  const tab = { book: 'library', collection: 'collections', timer: 'home' }[name] || name;
+  document.querySelectorAll('#tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
+  window.scrollTo(0, keepScroll ? y : 0);
+  renderTimerBar();
+  tick();
+}
+
+// ======================================================================
+// Shared pieces
+// ======================================================================
+const statusPill = (s) => `<span class="pill st-${s}"><span class="dot"></span>${esc(statusLabel(s))}</span>`;
+const fab = (act, label, extra = '') => `<button class="fab" data-act="${act}" ${extra} aria-label="${esc(label)}">${icon('plus')}</button>`;
+const backBtn = (fallback) => `<button class="icon-btn" data-act="back" data-fallback="${fallback}" aria-label="Back">${icon('back')}</button>`;
+
+function bookRow(b, extra = '') {
+  const pct = progressPct(b);
+  return `<a class="book-row" href="#/book/${b.id}" data-nav>
+    ${coverHtml(b, 'sm')}
+    <div class="info">
+      <div class="t">${esc(b.title)}</div>
+      <div class="a">${esc(b.authors || 'Unknown author')}</div>
+      <div class="meta">${statusPill(b.status)}${b.rating ? starsHtml(b.rating) : ''}<span class="pill">${esc(b.format)}</span>${b.ownership !== 'Owned' ? `<span class="pill">${esc(b.ownership)}</span>` : ''}</div>
+      ${b.status === 'reading' && pct != null ? `<div class="bar thin" style="margin-top:6px"><i style="width:${pct}%"></i></div>` : ''}
+    </div>${extra || icon('chev', 'chev')}</a>`;
+}
+
+function progressText(b) {
+  const pct = progressPct(b);
+  const page = pagePos(b);
+  if (b.progressMode === 'percent' || (page == null && pct != null)) return pct != null ? `${Math.round(pct)}%` : 'Not started';
+  if (page == null) return 'Not started';
+  return b.pages ? `p. ${page} of ${b.pages}` : `p. ${page}`;
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 5) return 'Up late reading?';
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+const PREVIEW = !!window.LAMPLIGHT_PREVIEW;
+function sampleBanner() {
+  const pv = PREVIEW ? `<div class="callout" style="margin-bottom:14px"><b>Preview.</b> Look around here; for your real library, install your own copy. Camera scanning, offline use and backups work in the installed app.</div>` : '';
+  return pv + (hasSamples() ? `<div class="sample-banner"><span>These are example books so you can look around.</span><button class="btn small ghost" data-act="remove-samples">Remove</button></div>` : '');
+}
+
+// ======================================================================
+// Home
+// ======================================================================
+function viewHome() {
+  const d = store.data;
+  const reading = d.books.filter((b) => b.status === 'reading');
+  const upNext = d.books.filter((b) => b.status === 'toread').slice(0, 10);
+  const st = streaks();
+  const now = new Date();
+  const todayMin = minutesOn(todayKey());
+  const monthDone = finishedIn(now.getFullYear(), now.getMonth()).length;
+  const yearDone = finishedIn(now.getFullYear(), null).length;
+  const g = d.goals;
+
+  let readingHtml;
+  if (!d.books.length) {
+    readingHtml = `<div class="empty"><b>Your shelf is empty</b>Add your first book by scanning its barcode, searching, or typing it in.
+      <div class="btn-row" style="justify-content:center;margin-top:16px"><button class="btn primary" data-act="add-book">${icon('plus')}Add a book</button></div>
+      <button class="link-btn" data-act="load-samples" style="margin-top:10px">Or look around with example books</button></div>`;
+  } else if (!reading.length) {
+    readingHtml = `<div class="empty"><b>Nothing on the go</b>Pick something from your To Read pile and set it to Reading.</div>`;
+  } else {
+    readingHtml = `<div class="reading-scroller">${reading.map((b) => readingCard(b, true)).join('')}</div>`;
+  }
+
+  return `
+  <div class="hello">
+    <div class="eyebrow">${esc(now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }))}</div>
+    <h1>${greeting()}</h1>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 6px">
+    ${st.current ? `<a class="streak-chip" href="#/stats" data-nav>${icon('flame')}${st.current}-day streak${st.readToday ? '' : ' · read today to keep it'}</a>` : (d.logs.length ? `<span class="streak-chip">${icon('flame')}Start a new streak today</span>` : '')}
+  </div>
+  ${sampleBanner()}
+  <h2 class="section">Currently reading</h2>
+  ${readingHtml}
+
+  ${upNext.length ? `<h2 class="section">Up next <a href="#/library" data-act="lib-filter" data-status="toread">See all</a></h2>
+  <div class="up-next">${upNext.map((b) => `<a href="#/book/${b.id}" data-nav>${coverHtml(b, 'md')}<span>${esc(b.title)}</span></a>`).join('')}</div>` : ''}
+
+  <h2 class="section">Goals <button data-act="edit-goals">Edit</button></h2>
+  <div class="goals">
+    <button class="goal" data-act="edit-goals">${ringHtml(todayMin, g.dailyMinutes, { label: Math.round(todayMin), small: `of ${g.dailyMinutes} min` })}<div class="g-name">Today</div></button>
+    <button class="goal" data-act="edit-goals">${ringHtml(monthDone, g.monthlyBooks, { label: monthDone, small: `of ${g.monthlyBooks}`, cls: 'teal' })}<div class="g-name">${esc(now.toLocaleDateString(undefined, { month: 'long' }))}</div><div class="g-sub">books</div></button>
+    <button class="goal" data-act="edit-goals">${ringHtml(yearDone, g.yearlyBooks, { label: yearDone, small: `of ${g.yearlyBooks}`, cls: 'sky' })}<div class="g-name">${now.getFullYear()}</div><div class="g-sub">books</div></button>
+  </div>
+  ${fab('add-book', 'Add a book')}`;
+}
+
+function readingCard(b, single) {
+  const pct = progressPct(b);
+  const active = store.data.active;
+  const isActive = active && active.bookId === b.id;
+  return `<div class="reading-card ${single ? 'single' : ''}">
+    <a class="top" href="#/book/${b.id}" data-nav>
+      ${coverHtml(b, 'md')}
+      <div class="info">
+        <div class="t">${esc(b.title)}</div>
+        <div class="muted small">${esc(b.authors || '')}</div>
+        <div class="pct-line"><span>${esc(progressText(b))}</span><span class="num">${pct != null && !progressText(b).endsWith('%') ? Math.round(pct) + '%' : ''}</span></div>
+        <div class="bar"><i style="width:${pct || 0}%"></i></div>
+      </div>
+    </a>
+    <div class="btn-row">
+      ${isActive ? `<a class="btn primary small" href="#/timer" data-nav>${icon('clock')}<span data-clock>${fmtClock(sessionElapsed())}</span></a>`
+        : `<button class="btn primary small" data-act="start-session" data-id="${b.id}">${icon('play')}Start session</button>`}
+      <button class="btn small" data-act="update-progress" data-id="${b.id}">Update progress</button>
+    </div>
+  </div>`;
+}
+
+// ======================================================================
+// Library
+// ======================================================================
+function filteredBooks() {
+  const f = ui.lib;
+  const q = f.q.trim().toLowerCase();
+  let list = store.data.books.filter((b) => {
+    if (f.status !== 'all' && b.status !== f.status) return false;
+    if (f.own !== 'all' && b.ownership !== f.own) return false;
+    if (f.format !== 'all' && b.format !== f.format) return false;
+    if (f.genre !== 'all' && !b.genres.includes(f.genre)) return false;
+    if (q && !`${b.title} ${b.subtitle} ${b.authors} ${b.isbn} ${b.genres.join(' ')}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const by = {
+    added: (a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''),
+    updated: (a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''),
+    title: (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }),
+    author: (a, b) => (a.authors || '~').localeCompare(b.authors || '~', undefined, { sensitivity: 'base' }),
+    rating: (a, b) => (b.rating || 0) - (a.rating || 0),
+  }[f.sort];
+  list = list.slice().sort(by);
+  return list;
+}
+
+function allGenres() {
+  const set = new Map();
+  store.data.books.forEach((b) => b.genres.forEach((g) => set.set(g.toLowerCase(), g)));
+  return [...set.values()].sort((a, b) => a.localeCompare(b));
+}
+
+function libraryListHtml() {
+  const list = filteredBooks();
+  if (!store.data.books.length) {
+    return `<div class="empty"><b>No books yet</b>Tap + to scan, search or type in your first book.
+      <div><button class="btn primary" data-act="add-book">${icon('plus')}Add a book</button></div></div>`;
+  }
+  if (!list.length) return `<div class="empty"><b>No matches</b>Try a different search or clear the filters.<div><button class="btn ghost" data-act="clear-filters">Clear filters</button></div></div>`;
+  return `<div class="muted small" style="margin:0 4px 8px">${plural(list.length, 'book')}</div><div class="book-list">${list.map((b) => bookRow(b)).join('')}</div>`;
+}
+
+function viewLibrary() {
+  const f = ui.lib;
+  const books = store.data.books;
+  const count = (s) => books.filter((b) => b.status === s).length;
+  const genres = allGenres();
+  const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
+  return `
+  <div class="page-head"><h1>Library</h1><span class="sub num">${plural(books.length, 'book')}</span></div>
+  ${sampleBanner()}
+  <label class="search">${icon('search')}<input id="lib-search" type="search" placeholder="Search title, author, ISBN, genre" value="${esc(f.q)}" autocomplete="off" data-input="lib-search"></label>
+  <div class="chips" role="tablist">
+    <button class="chip ${f.status === 'all' ? 'on' : ''}" data-act="lib-status" data-status="all">All <span class="count">${books.length}</span></button>
+    ${STATUSES.map((s) => `<button class="chip ${f.status === s.id ? 'on' : ''}" data-act="lib-status" data-status="${s.id}">${s.label} <span class="count">${count(s.id)}</span></button>`).join('')}
+  </div>
+  <div class="filter-row">
+    <select id="f-own" class="input compact" data-change="lib-own" aria-label="Ownership">${opt('all', 'Any ownership', f.own)}${OWNERSHIP.map((o) => opt(o, o, f.own)).join('')}</select>
+    <select id="f-format" class="input compact" data-change="lib-format" aria-label="Format">${opt('all', 'Any format', f.format)}${FORMATS.map((o) => opt(o, o, f.format)).join('')}</select>
+    <select id="f-genre" class="input compact" data-change="lib-genre" aria-label="Genre">${opt('all', 'Any genre', f.genre)}${genres.map((o) => opt(o, o, f.genre)).join('')}</select>
+    <select id="f-sort" class="input compact" data-change="lib-sort" aria-label="Sort">${opt('added', 'Recently added', f.sort)}${opt('updated', 'Recently updated', f.sort)}${opt('title', 'Title A–Z', f.sort)}${opt('author', 'Author A–Z', f.sort)}${opt('rating', 'Highest rated', f.sort)}</select>
+  </div>
+  <div id="lib-list">${libraryListHtml()}</div>
+  ${fab('add-book', 'Add a book')}`;
+}
+
+// ======================================================================
+// Book detail
+// ======================================================================
+function viewBook(id) {
+  const b = getBook(id);
+  if (!b) return `<div class="page-head">${backBtn('#/library')}<h1>Not found</h1></div><div class="empty"><b>This book isn't in your library</b>It may have been deleted.</div>`;
+  const pct = progressPct(b);
+  const totals = bookTotals(b.id);
+  const sp = speed();
+  const pageNow = pagePos(b);
+  const remaining = b.pages && pageNow != null ? b.pages - pageNow : null;
+  const pace = totals.pagesPerHour || sp.pagesPerHour;
+  const active = store.data.active;
+  const isActive = active && active.bookId === b.id;
+  const colls = collectionsOf(b.id);
+  const notes = b.notes.slice().sort((x, y) => (x.page ?? 1e9) - (y.page ?? 1e9) || x.createdAt.localeCompare(y.createdAt));
+  const logs = totals.logs.slice().sort((x, y) => (y.startedAt || y.date).localeCompare(x.startedAt || x.date));
+  const aboutOpen = ui.aboutOpen[b.id];
+
+  return `
+  <div class="page-head">${backBtn('#/library')}<div style="flex:1"></div>
+    <button class="icon-btn" data-act="edit-book" data-id="${b.id}" aria-label="Edit book">${icon('pen')}</button></div>
+
+  <div class="detail-hero">
+    ${coverHtml(b, 'lg')}
+    <div class="info">
+      <h1>${esc(b.title)}</h1>
+      ${b.subtitle ? `<div class="subtitle">${esc(b.subtitle)}</div>` : ''}
+      <div class="author">${esc(b.authors || 'Unknown author')}</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:4px">${starsHtml(b.rating, { size: 'md' })}<span class="muted small num">${b.rating ? fmtRating(b.rating) : 'Not rated'}</span></div>
+    </div>
+  </div>
+
+  <div class="status-picker" role="radiogroup" aria-label="Reading status">
+    ${STATUSES.map((s) => `<button role="radio" aria-checked="${b.status === s.id}" class="${b.status === s.id ? 'on' : ''}" style="--c:var(--st-${s.id})" data-act="set-status" data-id="${b.id}" data-status="${s.id}"><span class="dot"></span>${s.label}</button>`).join('')}
+  </div>
+
+  <h2 class="section">Progress</h2>
+  <div class="card stack">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
+      <b>${esc(progressText(b))}</b><span class="num muted">${pct != null && !progressText(b).endsWith('%') ? Math.round(pct) + '%' : (b.pages && pageNow != null && b.status !== 'finished' ? `≈ p. ${pageNow} of ${b.pages}` : '')}</span>
+    </div>
+    <div class="bar"><i style="width:${pct || 0}%"></i></div>
+    <div class="muted small">${[
+      totals.seconds ? `${fmtMinutes(totals.seconds / 60)} read` : '',
+      remaining > 0 && pace ? `about ${fmtMinutes(remaining / pace * 60)} left at your pace` : '',
+      b.startedAt ? `started ${fmtDate(b.startedAt)}` : '',
+      b.finishedAt ? `finished ${fmtDate(b.finishedAt)}` : '',
+    ].filter(Boolean).join(' · ') || 'No reading logged yet'}</div>
+    <div class="btn-row stacked">
+      ${isActive ? `<a class="btn primary" href="#/timer" data-nav>${icon('clock')}<span data-clock>${fmtClock(sessionElapsed())}</span></a>`
+        : `<button class="btn primary" data-act="start-session" data-id="${b.id}">${icon('play')}Start reading session</button>`}
+      <button class="btn" data-act="update-progress" data-id="${b.id}">Update progress</button>
+    </div>
+  </div>
+
+  <h2 class="section">Your rating</h2>
+  <div class="card">
+    <div class="rating-box">
+      ${starsHtml(b.rating, { size: 'lg', rateId: b.id })}
+      <span class="rating-val" data-rating-val>${fmtRating(b.rating)}</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;flex-wrap:wrap">
+      <span class="muted small">Tap or drag across the stars. Quarter stars count.</span>
+      <div class="rate-steps">
+        <button class="btn small ghost" data-act="rate-step" data-id="${b.id}" data-d="-0.25" aria-label="Lower rating by a quarter star">−¼</button>
+        <button class="btn small ghost" data-act="rate-step" data-id="${b.id}" data-d="0.25" aria-label="Raise rating by a quarter star">+¼</button>
+        ${b.rating ? `<button class="btn small ghost" data-act="rate-clear" data-id="${b.id}">Clear</button>` : ''}
+      </div>
+    </div>
+  </div>
+
+  <h2 class="section">About</h2>
+  ${b.about ? `<div class="card"><div class="about ${aboutOpen ? '' : 'clamp'}">${esc(b.about)}</div>
+    ${b.about.length > 320 ? `<button class="link-btn" data-act="toggle-about" data-id="${b.id}">${aboutOpen ? 'Show less' : 'Read more'}</button>` : ''}</div>`
+    : `<div class="empty" style="padding:22px"><span>No description yet.</span><div class="btn-row" style="justify-content:center;margin-top:12px">
+       <button class="btn small" data-act="fill-details" data-id="${b.id}">${icon('refresh')}Look it up</button>
+       <button class="btn small ghost" data-act="edit-book" data-id="${b.id}">Write one</button></div></div>`}
+
+  <h2 class="section">Details</h2>
+  <div class="facts">
+    <button class="fact" data-act="edit-book" data-id="${b.id}"><div class="k">Pages</div><div class="v num">${b.pages || 'Add'}</div></button>
+    <button class="fact" data-act="quick-pick" data-field="format" data-id="${b.id}"><div class="k">Format</div><div class="v">${esc(b.format)}</div></button>
+    <button class="fact" data-act="quick-pick" data-field="ownership" data-id="${b.id}"><div class="k">Ownership</div><div class="v">${esc(b.ownership)}</div></button>
+    <button class="fact" data-act="edit-book" data-id="${b.id}"><div class="k">Genre</div><div class="v">${esc(b.genres.join(', ') || 'Add')}</div></button>
+    ${b.published ? `<div class="fact"><div class="k">Published</div><div class="v">${esc(b.published)}</div></div>` : ''}
+    ${b.publisher ? `<div class="fact"><div class="k">Publisher</div><div class="v">${esc(b.publisher)}</div></div>` : ''}
+    ${b.isbn ? `<div class="fact"><div class="k">ISBN</div><div class="v num">${esc(b.isbn)}</div></div>` : ''}
+    ${totals.pagesPerHour ? `<div class="fact"><div class="k">Your speed</div><div class="v num">${Math.round(totals.pagesPerHour)} pages/h</div></div>` : ''}
+  </div>
+
+  <h2 class="section">Collections <button data-act="pick-collections" data-id="${b.id}">${colls.length ? 'Change' : 'Add'}</button></h2>
+  ${colls.length ? `<div class="chip-wrap">${colls.map((c) => `<a class="chip" href="#/collection/${c.id}" data-nav><span class="pill dot" style="width:10px;height:10px;padding:0;border-radius:50%;background:${esc(c.color)}"></span>${esc(c.name)}</a>`).join('')}</div>`
+    : `<p class="muted small" style="margin:0 4px">Not in any collection yet.</p>`}
+
+  <h2 class="section">Notes <button data-act="add-note" data-id="${b.id}">Add note</button></h2>
+  ${notes.length ? `<div class="stack">${notes.map((n) => `<div class="note"><div class="n-head">${n.page != null ? `<span class="n-page num">p. ${n.page}</span>` : '<span>Book note</span>'}<span class="faint">${fmtDate(n.createdAt.slice(0, 10))}</span><span class="sp"></span>
+      <button data-act="edit-note" data-id="${b.id}" data-note="${n.id}">Edit</button></div><div class="n-text">${esc(n.text)}</div></div>`).join('')}</div>`
+    : `<p class="muted small" style="margin:0 4px">Jot down thoughts on the whole book or on a specific page.</p>`}
+
+  <h2 class="section">Reading history <button data-act="update-progress" data-id="${b.id}" data-past="1">Log past reading</button></h2>
+  ${logs.length ? `<div class="stack">${logs.map((l) => logRow(l)).join('')}</div>` : `<p class="muted small" style="margin:0 4px">Sessions and page updates show up here.</p>`}
+  `;
+}
+
+function logRow(l) {
+  const parts = [];
+  if (l.seconds) parts.push(fmtMinutes(l.seconds / 60));
+  if (l.pages) parts.push(plural(l.pages, 'page'));
+  else if (l.toPct != null && l.fromPct != null && l.toPct !== l.fromPct) parts.push(`${Math.round(l.fromPct)}% → ${Math.round(l.toPct)}%`);
+  const when = l.startedAt ? `${fmtDate(l.date)}, ${new Date(l.startedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` : fmtDate(l.date);
+  return `<div class="log-row"><div class="ic">${icon(l.type === 'session' ? 'clock' : 'book')}</div>
+    <div class="info"><b>${esc(parts.join(' · ') || 'Logged')}</b><div class="muted small">${esc(when)}${l.toPage != null ? ` · to p. ${l.toPage}` : ''}</div></div>
+    <button class="del" data-act="delete-log" data-log="${l.id}" aria-label="Delete entry">${icon('trash')}</button></div>`;
+}
+
+// ======================================================================
+// Collections
+// ======================================================================
+function collStack(c) {
+  const books = c.bookIds.map(getBook).filter(Boolean).slice(0, 3);
+  return `<div class="coll-stack" style="--c:${esc(c.color)}">${books.map((b) => coverHtml(b, 'sm')).join('')}</div>`;
+}
+function viewCollections() {
+  const cs = store.data.collections;
+  return `
+  <div class="page-head"><h1>Collections</h1><span class="sub num">${plural(cs.length, 'collection')}</span></div>
+  ${cs.length ? `<div class="coll-grid">${cs.map((c) => `<a class="coll-card" href="#/collection/${c.id}" data-nav>${collStack(c)}
+      <div><div class="n">${esc(c.name)}</div><div class="c">${plural(c.bookIds.filter(getBook).length, 'book')}</div></div></a>`).join('')}</div>`
+    : `<div class="empty"><b>Group books your way</b>Make collections like "Summer 2026", "Book club" or "Signed copies". A book can be in as many as you like.
+      <div><button class="btn primary" data-act="new-collection">${icon('plus')}New collection</button></div></div>`}
+  ${fab('new-collection', 'New collection')}`;
+}
+
+function viewCollection(id) {
+  const c = getCollection(id);
+  if (!c) return `<div class="page-head">${backBtn('#/collections')}<h1>Not found</h1></div>`;
+  const books = c.bookIds.map(getBook).filter(Boolean);
+  return `
+  <div class="page-head">${backBtn('#/collections')}<div style="flex:1"></div>
+    <button class="icon-btn" data-act="edit-collection" data-id="${c.id}" aria-label="Edit collection">${icon('pen')}</button></div>
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px"><span style="width:14px;height:14px;border-radius:50%;background:${esc(c.color)};flex:none"></span>
+    <h1 class="book-title" style="font-size:28px;margin:0;line-height:1.15">${esc(c.name)}</h1></div>
+  ${c.description ? `<p class="muted" style="margin:0 0 6px">${esc(c.description)}</p>` : ''}
+  <p class="faint small" style="margin:0 0 16px">${plural(books.length, 'book')}</p>
+  ${books.length ? `<div class="book-list">${books.map((b) => bookRow(b, `<button class="icon-btn" style="width:36px;height:36px" data-act="coll-remove" data-coll="${c.id}" data-id="${b.id}" aria-label="Remove from collection">${icon('close')}</button>`)).join('')}</div>`
+    : `<div class="empty"><b>Empty for now</b>Add books from your library.<div><button class="btn primary" data-act="coll-add-books" data-id="${c.id}">${icon('plus')}Add books</button></div></div>`}
+  ${fab('coll-add-books', 'Add books', `data-id="${c.id}"`)}`;
+}
+
+// ======================================================================
+// Stats
+// ======================================================================
+function viewStats() {
+  const days = byDay();
+  const st = streaks(days);
+  const sp = speed();
+  const now = new Date();
+  if (!ui.cal) ui.cal = { y: now.getFullYear(), m: now.getMonth(), sel: todayKey() };
+  const { y, m, sel } = ui.cal;
+  const yt = yearTotals(now.getFullYear());
+  const monthPrefix = `${y}-${String(m + 1).padStart(2, '0')}-`;
+  const daysThisMonth = [...days.keys()].filter((k) => k.startsWith(monthPrefix)).length;
+
+  // calendar grid (Sunday first)
+  const first = new Date(y, m, 1);
+  const nDays = new Date(y, m + 1, 0).getDate();
+  const tk = todayKey();
+  let cells = '';
+  for (let i = 0; i < first.getDay(); i++) cells += '<span class="cal-day blank"></span>';
+  for (let dnum = 1; dnum <= nDays; dnum++) {
+    const k = `${monthPrefix}${String(dnum).padStart(2, '0')}`;
+    const day = days.get(k);
+    const lvl = day ? heatLevel(day, store.data.goals.dailyMinutes) : 0;
+    const label = day ? `${fmtDate(k)}: ${day.seconds ? fmtMinutes(day.seconds / 60) : ''}${day.pages ? ` ${day.pages} pages` : ''}` : `${fmtDate(k)}: no reading`;
+    cells += `<button class="cal-day ${lvl ? 'l' + lvl : ''} ${k === tk ? 'today' : ''} ${k === sel ? 'sel' : ''} ${k > tk ? 'future' : ''}" data-act="cal-day" data-key="${k}" aria-label="${esc(label)}">${dnum}</button>`;
+  }
+  const monthName = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const selDay = days.get(sel);
+  const dayBooks = selDay ? [...selDay.books.entries()].map(([id, v]) => ({ b: getBook(id), ...v })).filter((x) => x.b) : [];
+
+  const maxBar = Math.max(1, ...yt.perMonth);
+  const months = Array.from({ length: 12 }, (_, i) => new Date(2000, i, 1).toLocaleDateString(undefined, { month: 'narrow' }));
+
+  return `
+  <div class="page-head"><h1>Stats</h1></div>
+  <div class="stat-grid">
+    <div class="stat hero"><div class="flame">${icon('flame')}</div>
+      <div><div class="k">Current streak</div><div class="v">${st.current}<small>${st.current === 1 ? 'day' : 'days'}</small></div>
+      <div class="d">${st.current && !st.readToday ? 'Read today to keep it going' : (st.readToday ? 'You read today' : 'Read today to start one')}</div></div></div>
+    <div class="stat"><div class="k">Longest streak</div><div class="v">${st.longest}<small>days</small></div></div>
+    <div class="stat"><div class="k">Days read</div><div class="v">${daysThisMonth}<small>in ${esc(first.toLocaleDateString(undefined, { month: 'short' }))}</small></div></div>
+  </div>
+
+  <h2 class="section">Reading calendar</h2>
+  <div class="cal">
+    <div class="cal-head"><button class="icon-btn" data-act="cal-move" data-d="-1" aria-label="Previous month">${icon('left')}</button>
+      <b>${esc(monthName)}</b><button class="icon-btn" data-act="cal-move" data-d="1" aria-label="Next month">${icon('right')}</button></div>
+    <div class="cal-grid">${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d) => `<span class="cal-dow">${d}</span>`).join('')}${cells}</div>
+    <div class="cal-legend"><span>Less</span><i style="background:var(--heat-0)"></i><i style="background:var(--heat-1)"></i><i style="background:var(--heat-2)"></i><i style="background:var(--heat-3)"></i><i style="background:var(--heat-4)"></i><span>Daily goal met</span></div>
+    <div class="day-detail">
+      <div class="dd-head"><b>${esc(fmtDate(sel, { weekday: 'long', month: 'long', day: 'numeric' }))}</b>
+        <span class="muted small num">${selDay ? [selDay.seconds ? fmtMinutes(selDay.seconds / 60) : '', selDay.pages ? plural(selDay.pages, 'page') : ''].filter(Boolean).join(' · ') : ''}</span></div>
+      ${dayBooks.length ? dayBooks.map((x) => `<a class="day-book" href="#/book/${x.b.id}" data-nav>${coverHtml(x.b, 'xs')}<div class="info"><div class="t">${esc(x.b.title)}</div>
+        <div class="muted small">${[x.seconds ? fmtMinutes(x.seconds / 60) : '', x.pages ? plural(x.pages, 'page') : ''].filter(Boolean).join(' · ') || 'Progress updated'}</div></div></a>`).join('')
+        : '<span class="muted small">No reading logged this day.</span>'}
+    </div>
+  </div>
+
+  <h2 class="section">Reading speed</h2>
+  <div class="stat-grid">
+    <div class="stat"><div class="k">Average</div><div class="v">${sp.pagesPerHour ? Math.round(sp.pagesPerHour) : '–'}<small>pages/hour</small></div>
+      <div class="d">${sp.minutesPerPage ? `${sp.minutesPerPage.toFixed(1)} min per page` : 'Time a session to measure'}</div></div>
+    <div class="stat"><div class="k">Avg session</div><div class="v">${sp.avgSessionMin ? Math.round(sp.avgSessionMin) : '–'}<small>min</small></div><div class="d">${plural(sp.sessions, 'session')} timed</div></div>
+  </div>
+
+  <h2 class="section">${now.getFullYear()} so far</h2>
+  <div class="stat-grid">
+    <div class="stat"><div class="k">Books finished</div><div class="v">${yt.finished}<small>of ${store.data.goals.yearlyBooks}</small></div></div>
+    <div class="stat"><div class="k">Pages read</div><div class="v">${yt.pages.toLocaleString()}</div></div>
+    <div class="stat"><div class="k">Time reading</div><div class="v">${Math.round(yt.seconds / 3600)}<small>hours</small></div></div>
+    <div class="stat"><div class="k">Avg rating</div><div class="v">${yt.avgRating ? fmtRating(Math.round(yt.avgRating * 4) / 4) : '–'}<small>${yt.avgRating ? 'stars' : ''}</small></div></div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <div class="eyebrow">Books finished per month</div>
+    <div class="bars" role="img" aria-label="Books finished per month in ${now.getFullYear()}">${yt.perMonth.map((n, i) => `<div class="b" title="${esc(new Date(2000, i, 1).toLocaleDateString(undefined, { month: 'long' }))}: ${plural(n, 'book')}">${n ? `<em>${n}</em>` : ''}<i class="${n ? '' : 'zero'}" style="height:${n ? Math.max(6, (n / maxBar) * 100) : 3}%"></i></div>`).join('')}</div>
+    <div class="bars-x">${months.map((mm, i) => `<span class="${i === now.getMonth() ? 'cur' : ''}">${esc(mm)}</span>`).join('')}</div>
+  </div>`;
+}
+
+// ======================================================================
+// Settings
+// ======================================================================
+function viewSettings() {
+  const d = store.data;
+  const g = d.goals;
+  return `
+  <div class="page-head"><h1>Settings</h1></div>
+  <h2 class="section">Reading goals</h2>
+  <div class="settings-list">
+    <button data-act="edit-goals"><span class="grow">Daily reading time</span><span class="val num">${g.dailyMinutes} min</span></button>
+    <button data-act="edit-goals"><span class="grow">Books per month</span><span class="val num">${g.monthlyBooks}</span></button>
+    <button data-act="edit-goals"><span class="grow">Books per year</span><span class="val num">${g.yearlyBooks}</span></button>
+  </div>
+
+  <h2 class="section">Backup</h2>
+  <div class="callout"><b>Your library lives only on this phone.</b> Save a backup to iCloud Drive or Files now and then, so a new phone or a deleted app doesn't mean starting over.</div>
+  <div class="settings-list" style="margin-top:12px">
+    <button data-act="export"><span class="grow">Save a backup</span><span class="val">${d.settings.lastBackup ? `Last: ${esc(fmtDate(d.settings.lastBackup.slice(0, 10)))}` : 'Never'}</span></button>
+    <label style="cursor:pointer"><span class="grow">Restore from a backup</span><span class="val">Choose file</span>
+      <input type="file" id="import-file" accept="application/json,.json" data-change="import" hidden></label>
+  </div>
+
+  <h2 class="section">Storage</h2>
+  <div class="settings-list">
+    <div><span class="grow">Books</span><span class="val num">${d.books.length}</span></div>
+    <div><span class="grow">Reading entries</span><span class="val num">${d.logs.length}</span></div>
+    <div><span class="grow">Protected from clean-up</span><span class="val" id="persist-state">Checking…</span></div>
+  </div>
+
+  <h2 class="section">Install on iPhone</h2>
+  <div class="card small muted" style="line-height:1.6">Open this page in <b style="color:var(--text)">Safari</b>, tap the <b style="color:var(--text)">Share</b> button, then <b style="color:var(--text)">Add to Home Screen</b>. Launch it from the new icon and it runs full screen and offline.</div>
+
+  <h2 class="section">Examples & reset</h2>
+  <div class="settings-list">
+    ${hasSamples() ? '<button data-act="remove-samples"><span class="grow">Remove example books</span></button>' : '<button data-act="load-samples"><span class="grow">Add example books</span></button>'}
+    <button data-act="erase-all"><span class="grow red">Erase everything</span></button>
+  </div>
+
+  <p class="faint small" style="text-align:center;margin-top:28px;line-height:1.6">Lamplight ${APP_VERSION}<br>Book details from Google Books and Open Library.<br>Barcode scanning by html5-qrcode (Apache 2.0).</p>`;
+}
+
+async function showPersistState() {
+  const el = document.getElementById('persist-state');
+  if (!el) return;
+  try {
+    const p = navigator.storage && navigator.storage.persisted ? await navigator.storage.persisted() : false;
+    el.textContent = p ? 'Yes' : 'Ask again';
+    if (!p) { el.style.color = 'var(--gold)'; el.style.cursor = 'pointer'; el.onclick = requestPersist; }
+  } catch (e) { el.textContent = 'Unknown'; }
+}
+async function requestPersist() {
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      const ok = await navigator.storage.persist();
+      const el = document.getElementById('persist-state');
+      if (el) el.textContent = ok ? 'Yes' : 'Not granted';
+    }
+  } catch (e) { /* not supported */ }
+}
+
+// ======================================================================
+// Timer (reading session)
+// ======================================================================
+function viewTimer() {
+  const a = store.data.active;
+  const b = a && getBook(a.bookId);
+  if (!a || !b) {
+    return `<div class="page-head">${backBtn('#/home')}<h1>Reading session</h1></div>
+      <div class="empty"><b>No session running</b>Start one from any book you're reading.<div><a class="btn primary" href="#/library" data-nav>Go to library</a></div></div>`;
+  }
+  const started = new Date(a.startedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return `<div class="page-head">${backBtn('#/home')}<div style="flex:1"></div></div>
+  <div class="timer-view">
+    ${coverHtml(b, 'lg')}
+    <h2>${esc(b.title)}</h2>
+    <div class="timer-clock" data-clock>${fmtClock(sessionElapsed())}</div>
+    <div class="muted">Started ${esc(started)}${a.startPage != null ? ` · from p. ${a.startPage}` : (a.startPct != null ? ` · from ${Math.round(a.startPct)}%` : '')}${a.pausedAt ? ' · paused' : ''}</div>
+    <div class="btn-row">
+      ${a.pausedAt ? `<button class="btn big" data-act="timer-resume">${icon('play')}Resume</button>` : `<button class="btn big" data-act="timer-pause">${icon('pause')}Pause</button>`}
+      <button class="btn primary big" data-act="timer-finish">${icon('stop')}Finish</button>
+    </div>
+    <label class="toggle-line"><span><b>Keep screen on</b><br><span class="muted small">Stops the phone from dimming while you read</span></span>
+      <span class="switch"><input type="checkbox" id="wake-toggle" data-change="wake" ${ui.wantWake ? 'checked' : ''}><i></i></span></label>
+    <button class="link-btn" data-act="timer-cancel" style="color:var(--faint)">Discard this session</button>
+  </div>`;
+}
+
+function renderTimerBar() {
+  const a = store.data.active;
+  const b = a && getBook(a.bookId);
+  const show = !!(a && b && ui.route.name !== 'timer');
+  document.body.classList.toggle('timer-on', show);
+  timerBar.hidden = !show;
+  if (!show) return;
+  timerBar.classList.toggle('paused', !!a.pausedAt);
+  timerBar.innerHTML = `<span class="tb-dot"></span><a class="tb-title" href="#/timer" data-nav>${esc(b.title)}</a>
+    <span class="tb-time" data-clock>${fmtClock(sessionElapsed())}</span>
+    <button data-act="timer-finish">Finish</button>`;
+}
+
+function tick() {
+  if (!store.data.active) return;
+  const t = fmtClock(sessionElapsed());
+  document.querySelectorAll('[data-clock]').forEach((el) => { if (el.textContent !== t) el.textContent = t; });
+}
+setInterval(tick, 1000);
+
+async function setWake(on) {
+  ui.wantWake = on;
+  try {
+    if (on && 'wakeLock' in navigator) {
+      ui.wakeLock = await navigator.wakeLock.request('screen');
+    } else if (!on && ui.wakeLock) {
+      await ui.wakeLock.release(); ui.wakeLock = null;
+    }
+  } catch (e) {
+    if (on) toast("This phone didn't allow keeping the screen on.");
+  }
+}
+
+// ======================================================================
+// Sheets: add book (scan / search / manual)
+// ======================================================================
+function addBookSheet() {
+  openSheet(`${sheetHead('Add a book')}
+    <div class="option-list">
+      <button class="option" data-act="open-scan"><span class="ic">${icon('scan')}</span><span><b>Scan barcode or QR code</b><small>Point the camera at the barcode on the back cover</small></span></button>
+      <button class="option" data-act="open-search"><span class="ic">${icon('search')}</span><span><b>Search</b><small>Find it by title, author or ISBN</small></span></button>
+      <button class="option" data-act="open-manual"><span class="ic">${icon('type')}</span><span><b>Type it in</b><small>Fill in the details yourself</small></span></button>
+    </div>
+    ${isOnline() ? '' : '<p class="muted small" style="margin:14px 4px 0">You\'re offline. Scanning still saves the ISBN, and you can fetch the details later.</p>'}`);
+}
+
+let searchResults = [];
+function searchSheet(initial = '') {
+  const sheet = openSheet(`${sheetHead('Search for a book')}
+    <form id="search-form" class="form" autocomplete="off">
+      <label class="search" style="margin:0">${icon('search')}<input id="search-q" type="search" placeholder="Title, author or ISBN" value="${esc(initial)}" autofocus enterkeyhint="search"></label>
+    </form>
+    <div id="search-results" class="stack" style="margin-top:14px"></div>`);
+  const form = sheet.querySelector('#search-form');
+  const out = sheet.querySelector('#search-results');
+  const run = async () => {
+    const q = sheet.querySelector('#search-q').value.trim();
+    if (!q) return;
+    if (!isOnline()) { out.innerHTML = `<p class="muted">You're offline, so search can't reach the book databases. <button class="link-btn" data-act="manual-from-search">Type it in instead</button></p>`; return; }
+    out.innerHTML = '<div class="spinner"></div>';
+    try {
+      searchResults = await searchBooks(q);
+      if (!searchResults.length) { out.innerHTML = `<p class="muted">No books found for "${esc(q)}". <button class="link-btn" data-act="manual-from-search">Add it by hand</button></p>`; return; }
+      out.innerHTML = searchResults.map((r, i) => `<button class="result" data-pick-result="${i}">${coverHtml(r, 'sm')}<div class="info"><div class="t">${esc(r.title)}</div>
+        <div class="muted small">${esc(r.authors || 'Unknown author')}${r.published ? ` · ${esc(String(r.published).slice(0, 4))}` : ''}</div>
+        <div class="faint small">${[r.pages ? `${r.pages} pages` : '', r.isbn ? `ISBN ${esc(r.isbn)}` : ''].filter(Boolean).join(' · ')}</div></div></button>`).join('')
+        + `<button class="link-btn" data-act="manual-from-search" style="align-self:center">Not here? Add it by hand</button>`;
+    } catch (e) {
+      out.innerHTML = `<p class="muted">${esc(e.message)} Check your connection and try again.</p>`;
+    }
+  };
+  form.addEventListener('submit', (e) => { e.preventDefault(); sheet.querySelector('#search-q').blur(); run(); });
+  out.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-pick-result]');
+    if (!btn) return;
+    const r = searchResults[Number(btn.dataset.pickResult)];
+    const existing = findByIsbn(r.isbn);
+    if (existing) { closeAllSheets(); toast('Already in your library'); go(`#/book/${existing.id}`); return; }
+    btn.style.opacity = '.5';
+    const full = await completeResult(r);
+    closeSheet();
+    bookFormSheet(full, { isNew: true, fromDb: true });
+  });
+  if (initial) run();
+}
+
+function scanSheet() {
+  let handled = false;
+  const sheet = openSheet(`${sheetHead('Scan a book')}
+    <div class="scan-box"><div id="reader"></div><div class="scan-hint" id="scan-hint">Line the barcode up inside the box</div></div>
+    <p class="scan-status" id="scan-status">Starting camera…</p>
+    <form id="isbn-form" class="form" style="flex-direction:row;gap:8px" autocomplete="off">
+      <input id="isbn-input" class="input" inputmode="numeric" placeholder="Or type the ISBN" style="flex:1">
+      <button class="btn primary" type="submit">Look up</button>
+    </form>
+    <label class="btn ghost block" style="margin-top:10px">${icon('photo')}Scan from a photo instead<input type="file" id="scan-photo" accept="image/*" hidden></label>`,
+  { onClose: () => stopScanner() });
+  const status = sheet.querySelector('#scan-status');
+
+  const handleText = async (text) => {
+    if (handled) return;
+    handled = true;
+    await stopScanner();
+    const isbn = extractIsbn(text);
+    if (!isbn) {
+      status.innerHTML = `That code says "${esc(String(text).slice(0, 80))}", which isn't an ISBN. <button class="link-btn" data-act="rescan">Try again</button>`;
+      return;
+    }
+    handleIsbn(isbn);
+  };
+  const handleIsbn = async (isbn) => {
+    handled = true;
+    const existing = findByIsbn(isbn);
+    if (existing) { closeAllSheets(); toast('Already in your library'); go(`#/book/${existing.id}`); return; }
+    if (!isOnline()) {
+      closeSheet();
+      bookFormSheet({ isbn, title: '' }, { isNew: true, note: `Saved ISBN ${isbn}. You're offline, so add the title now and tap "Fill in missing details" later.` });
+      return;
+    }
+    status.innerHTML = `Found ISBN <b class="num">${esc(isbn)}</b>. Looking it up…`;
+    try {
+      const r = await lookupIsbn(isbn);
+      closeSheet();
+      if (r) bookFormSheet(r, { isNew: true, fromDb: true });
+      else bookFormSheet({ isbn }, { isNew: true, note: `No database had ISBN ${isbn}. Fill in what you know; you can retry the lookup later.` });
+    } catch (e) {
+      closeSheet();
+      bookFormSheet({ isbn }, { isNew: true, note: `${e.message} The ISBN is saved; add the title and try "Fill in missing details" later.` });
+    }
+  };
+
+  const begin = async () => {
+    handled = false;
+    status.textContent = 'Starting camera…';
+    try {
+      await startScanner('reader', handleText);
+      status.textContent = 'Hold steady. It scans automatically.';
+    } catch (e) {
+      const msg = String(e && (e.message || e));
+      status.innerHTML = /permission|notallowed|denied/i.test(msg)
+        ? 'Camera access is off. Allow it in Settings › Safari › Camera (or for this app), type the ISBN, or scan a photo.'
+        : 'The camera couldn\'t start here. Type the ISBN or scan a photo instead.';
+      sheet.querySelector('#scan-hint').hidden = true;
+    }
+  };
+  sheet.addEventListener('click', (e) => { if (e.target.closest('[data-act="rescan"]')) { e.stopPropagation(); begin(); } });
+  sheet.querySelector('#isbn-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = cleanIsbn(sheet.querySelector('#isbn-input').value);
+    if (v.length < 10) { status.textContent = 'An ISBN has 10 or 13 digits.'; return; }
+    stopScanner();
+    handleIsbn(v);
+  });
+  sheet.querySelector('#scan-photo').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    await stopScanner();
+    status.textContent = 'Reading the photo…';
+    try {
+      const text = await scanImageFile(file, 'reader');
+      handled = false;
+      handleText(text);
+    } catch (err) {
+      status.textContent = "Couldn't find a barcode in that photo. Try a closer, sharper shot.";
+    }
+  });
+  setTimeout(begin, 350);
+}
+
+// ======================================================================
+// Sheet: add / edit book
+// ======================================================================
+function bookFormSheet(initial, { isNew = false, fromDb = false, note = '' } = {}) {
+  const b = { title: '', subtitle: '', authors: '', about: '', pages: '', genres: [], format: 'Paperback', ownership: 'Owned', status: 'toread', isbn: '', publisher: '', published: '', startedAt: '', finishedAt: '', progressMode: 'pages', cover: '', ...initial };
+  let cover = b.cover || '';
+  const existingColl = isNew ? [] : collectionsOf(b.id).map((c) => c.id);
+  const genres = allGenres();
+  const opt = (list, cur) => list.map((o) => `<option ${o === cur ? 'selected' : ''}>${esc(o)}</option>`).join('');
+
+  const sheet = openSheet(`${sheetHead(isNew ? 'New book' : 'Edit book')}
+  <form id="book-form" class="form" autocomplete="off">
+    ${note ? `<div class="callout">${esc(note)}</div>` : ''}
+    ${fromDb ? '<p class="muted small" style="margin:0 4px">Details filled in from the book databases. Change anything that looks off.</p>' : ''}
+    <div class="cover-edit">
+      <div id="cover-preview">${coverHtml({ ...b, cover }, 'md')}</div>
+      <div class="btns">
+        <label class="btn small">${icon('photo')}Choose photo<input type="file" id="cover-file" accept="image/*" hidden></label>
+        <button type="button" class="btn small ghost" id="cover-url-btn">Use image link</button>
+        <button type="button" class="btn small ghost" id="cover-remove" ${cover ? '' : 'hidden'}>Remove cover</button>
+      </div>
+    </div>
+    <input id="cover-url" class="input" type="url" placeholder="https://… image link" hidden>
+    <button type="button" class="btn ghost block" id="fill-btn">${icon('refresh')}Fill in missing details</button>
+    <label class="field"><span>Title</span><input class="input" id="bf-title" name="title" value="${esc(b.title)}" required></label>
+    <label class="field"><span>Subtitle</span><input class="input" id="bf-subtitle" name="subtitle" value="${esc(b.subtitle)}"></label>
+    <label class="field"><span>Author(s)</span><input class="input" id="bf-authors" name="authors" value="${esc(b.authors)}" placeholder="Separate with commas"></label>
+    <label class="field"><span>About</span><textarea class="input" id="bf-about" name="about" placeholder="What is it about?">${esc(b.about)}</textarea></label>
+    <div class="grid-2">
+      <label class="field"><span>Pages</span><input class="input num" id="bf-pages" name="pages" type="number" inputmode="numeric" min="0" value="${esc(b.pages ?? '')}"></label>
+      <label class="field"><span>Track progress by</span><select class="input" id="bf-mode" name="progressMode"><option value="pages" ${b.progressMode !== 'percent' ? 'selected' : ''}>Pages</option><option value="percent" ${b.progressMode === 'percent' ? 'selected' : ''}>Percent</option></select></label>
+    </div>
+    <div class="grid-2">
+      <label class="field"><span>Format</span><select class="input" id="bf-format" name="format">${opt(FORMATS, b.format)}</select></label>
+      <label class="field"><span>Ownership</span><select class="input" id="bf-own" name="ownership">${opt(OWNERSHIP, b.ownership)}</select></label>
+    </div>
+    <label class="field"><span>Reading status</span><select class="input" id="bf-status" name="status">${STATUSES.map((s) => `<option value="${s.id}" ${s.id === b.status ? 'selected' : ''}>${s.label}</option>`).join('')}</select></label>
+    <label class="field"><span>Genre</span><input class="input" id="bf-genres" name="genres" value="${esc((b.genres || []).join(', '))}" placeholder="e.g. Fantasy, Romance"></label>
+    ${genres.length ? `<div class="genre-suggest" id="genre-suggest">${genres.map((g) => `<button type="button" data-genre="${esc(g)}">${esc(g)}</button>`).join('')}</div>` : ''}
+    <div class="grid-2">
+      <label class="field"><span>Started</span><input class="input" id="bf-started" name="startedAt" type="date" value="${esc(b.startedAt)}"></label>
+      <label class="field"><span>Finished</span><input class="input" id="bf-finished" name="finishedAt" type="date" value="${esc(b.finishedAt)}"></label>
+    </div>
+    <div class="grid-2">
+      <label class="field"><span>ISBN</span><input class="input num" id="bf-isbn" name="isbn" inputmode="numeric" value="${esc(b.isbn)}"></label>
+      <label class="field"><span>Published</span><input class="input" id="bf-published" name="published" value="${esc(b.published)}"></label>
+    </div>
+    <label class="field"><span>Publisher</span><input class="input" id="bf-publisher" name="publisher" value="${esc(b.publisher)}"></label>
+    ${store.data.collections.length ? `<div class="field"><span>Collections</span><div class="chip-wrap">${store.data.collections.map((c) => `<label class="chip" style="cursor:pointer"><input type="checkbox" name="coll" value="${c.id}" ${existingColl.includes(c.id) ? 'checked' : ''} style="accent-color:var(--gold)">${esc(c.name)}</label>`).join('')}</div></div>` : ''}
+    <button class="btn primary block" type="submit">${isNew ? 'Add to library' : 'Save changes'}</button>
+    ${isNew ? '' : '<button type="button" class="btn danger block" id="delete-book">Delete book</button>'}
+  </form>`);
+
+  const form = sheet.querySelector('#book-form');
+  const $ = (sel) => sheet.querySelector(sel);
+  const refreshCover = () => {
+    $('#cover-preview').innerHTML = coverHtml({ title: $('#bf-title').value || 'Untitled', authors: $('#bf-authors').value, cover }, 'md');
+    $('#cover-remove').hidden = !cover;
+  };
+  $('#cover-file').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try { cover = await imageFileToDataUrl(f); refreshCover(); } catch (err) { toast(err.message); }
+  });
+  $('#cover-url-btn').addEventListener('click', () => { const u = $('#cover-url'); u.hidden = !u.hidden; if (!u.hidden) u.focus(); });
+  $('#cover-url').addEventListener('change', (e) => { cover = e.target.value.trim(); refreshCover(); });
+  $('#cover-remove').addEventListener('click', () => { cover = ''; $('#cover-url').value = ''; refreshCover(); });
+  $('#bf-title').addEventListener('change', refreshCover);
+
+  const gs = $('#genre-suggest');
+  const syncGenreChips = () => {
+    if (!gs) return;
+    const cur = $('#bf-genres').value.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+    gs.querySelectorAll('button').forEach((bt) => bt.classList.toggle('on', cur.includes(bt.dataset.genre.toLowerCase())));
+  };
+  if (gs) {
+    syncGenreChips();
+    $('#bf-genres').addEventListener('input', syncGenreChips);
+    gs.addEventListener('click', (e) => {
+      const bt = e.target.closest('[data-genre]');
+      if (!bt) return;
+      let cur = $('#bf-genres').value.split(',').map((x) => x.trim()).filter(Boolean);
+      const g = bt.dataset.genre;
+      cur = cur.some((x) => x.toLowerCase() === g.toLowerCase()) ? cur.filter((x) => x.toLowerCase() !== g.toLowerCase()) : [...cur, g];
+      $('#bf-genres').value = cur.join(', ');
+      syncGenreChips();
+    });
+  }
+
+  $('#fill-btn').addEventListener('click', async () => {
+    const probe = { title: $('#bf-title').value.trim(), authors: $('#bf-authors').value.trim(), isbn: cleanIsbn($('#bf-isbn').value) };
+    if (!probe.title && !probe.isbn) { toast('Add a title or ISBN first'); return; }
+    if (!isOnline()) { toast("You're offline. Try again when connected."); return; }
+    const btn = $('#fill-btn');
+    btn.disabled = true; btn.innerHTML = 'Looking it up…';
+    try {
+      const r = await lookupForBook(probe);
+      if (!r) { toast('No match found. Check the title or ISBN.'); return; }
+      let filled = 0;
+      const fill = (sel, val) => { const el = $(sel); if (el && !el.value.trim() && val) { el.value = val; filled += 1; } };
+      fill('#bf-title', r.title); fill('#bf-subtitle', r.subtitle); fill('#bf-authors', r.authors); fill('#bf-about', r.about);
+      fill('#bf-pages', r.pages ? String(r.pages) : ''); fill('#bf-genres', (r.genres || []).join(', ')); fill('#bf-isbn', r.isbn);
+      fill('#bf-published', r.published); fill('#bf-publisher', r.publisher);
+      if (!cover && r.cover) { cover = r.cover; filled += 1; refreshCover(); }
+      syncGenreChips();
+      toast(filled ? `Filled in ${plural(filled, 'field')}` : 'Nothing was missing that the databases knew');
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.disabled = false; btn.innerHTML = `${icon('refresh')}Fill in missing details`;
+    }
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const data = {
+      title: fd.get('title').trim(), subtitle: fd.get('subtitle').trim(), authors: fd.get('authors').trim(),
+      about: fd.get('about').trim(), pages: fd.get('pages'), progressMode: fd.get('progressMode'),
+      format: fd.get('format'), ownership: fd.get('ownership'), status: fd.get('status'),
+      genres: fd.get('genres').split(',').map((x) => x.trim()).filter(Boolean),
+      startedAt: fd.get('startedAt'), finishedAt: fd.get('finishedAt'), isbn: fd.get('isbn').trim(),
+      published: fd.get('published').trim(), publisher: fd.get('publisher').trim(), cover,
+    };
+    const colls = fd.getAll('coll');
+    if (!data.title) { toast('A title is needed'); return; }
+    if (isNew) {
+      const dup = findByIsbn(data.isbn);
+      if (dup) {
+        const ok = await confirmSheet({ title: 'Already in your library', message: `"${dup.title}" has the same ISBN. Add another copy anyway?`, confirm: 'Add anyway', danger: false });
+        if (!ok) return;
+      }
+      const nb = addBook(data);
+      setBookCollections(nb.id, colls);
+      requestPersist();
+      closeAllSheets();
+      toast(`Added "${nb.title}"`);
+      go(`#/book/${nb.id}`);
+    } else {
+      updateBook(b.id, data);
+      setBookCollections(b.id, colls);
+      closeSheet();
+      toast('Saved');
+    }
+  });
+
+  if (!isNew) {
+    $('#delete-book').addEventListener('click', async () => {
+      const ok = await confirmSheet({ title: `Delete "${b.title}"?`, message: 'Its notes and reading history go too. This can\'t be undone.' });
+      if (!ok) return;
+      deleteBook(b.id);
+      closeAllSheets();
+      toast('Book deleted');
+      back('#/library');
+    });
+  }
+}
+
+// ======================================================================
+// Sheets: progress, sessions, notes, goals, collections
+// ======================================================================
+function progressSheet(bookId, { past = false } = {}) {
+  const b = getBook(bookId);
+  if (!b) return;
+  let mode = b.progressMode === 'percent' ? 'percent' : 'page';
+  const cur = pagePos(b);
+  const curPct = progressPct(b);
+  const sheet = openSheet(`${sheetHead(past ? 'Log past reading' : 'Update progress')}
+    <form id="prog-form" class="form" autocomplete="off">
+      <p class="muted small" style="margin:-6px 4px 0">${esc(b.title)} · now ${esc(progressText(b))}</p>
+      <div class="seg" role="tablist">
+        <button type="button" data-mode="page">On page</button>
+        <button type="button" data-mode="read">Pages read</button>
+        <button type="button" data-mode="percent">Percent</button>
+      </div>
+      <label class="field"><span id="pf-label"></span><input class="input num" id="pf-value" type="number" inputmode="decimal" min="0" step="any" required autofocus></label>
+      <div class="grid-2">
+        <label class="field"><span>Minutes spent</span><input class="input num" id="pf-min" type="number" inputmode="numeric" min="0" placeholder="Optional"></label>
+        <label class="field"><span>Date</span><input class="input" id="pf-date" type="date" value="${todayKey()}" max="${todayKey()}"></label>
+      </div>
+      <label class="field"><span>Note</span><textarea class="input" id="pf-note" placeholder="Optional thought on this part" style="min-height:70px"></textarea></label>
+      <button class="btn primary block" type="submit">Save</button>
+    </form>`);
+  const $ = (s) => sheet.querySelector(s);
+  const setMode = (m) => {
+    mode = m;
+    sheet.querySelectorAll('.seg button').forEach((x) => x.classList.toggle('on', x.dataset.mode === m));
+    const input = $('#pf-value');
+    if (m === 'page') { $('#pf-label').textContent = b.pages ? `Page you're on (of ${b.pages})` : "Page you're on"; input.value = cur ?? ''; input.max = b.pages || ''; }
+    if (m === 'read') { $('#pf-label').textContent = 'How many pages did you read?'; input.value = ''; input.removeAttribute('max'); }
+    if (m === 'percent') { $('#pf-label').textContent = 'Percent complete'; input.value = curPct != null ? Math.round(curPct) : ''; input.max = 100; }
+  };
+  setMode(mode);
+  sheet.querySelector('.seg').addEventListener('click', (e) => { const x = e.target.closest('[data-mode]'); if (x) setMode(x.dataset.mode); });
+  $('#prog-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = Number($('#pf-value').value);
+    if (!Number.isFinite(v) || v < 0) return;
+    const pos = mode === 'page' ? { page: v } : mode === 'read' ? { pagesRead: v } : { percent: v };
+    if (mode === 'percent' && b.progressMode !== 'percent') updateBook(b.id, { progressMode: 'percent' });
+    if (mode === 'page' && b.progressMode === 'percent') updateBook(b.id, { progressMode: 'pages' });
+    const min = Number($('#pf-min').value) || 0;
+    const res = recordProgress(b.id, pos, { seconds: min * 60, date: $('#pf-date').value || todayKey(), note: $('#pf-note').value, type: 'manual' });
+    closeSheet();
+    toast('Progress saved');
+    if (res && res.reachedEnd) offerFinish(b.id);
+  });
+}
+
+async function offerFinish(bookId) {
+  const b = getBook(bookId);
+  const ok = await confirmSheet({ title: 'You reached the end!', message: `Mark "${b.title}" as finished?`, confirm: 'Mark finished', danger: false });
+  if (ok) { updateBook(bookId, { status: 'finished' }); rateAfterFinish(bookId); }
+}
+
+function rateAfterFinish(bookId) {
+  const b = getBook(bookId);
+  const sheet = openSheet(`${sheetHead('How was it?')}
+    <p class="muted" style="margin:-6px 0 16px">Rate "${esc(b.title)}". Tap or drag; quarter stars count.</p>
+    <div class="rating-box" style="justify-content:center">${starsHtml(b.rating, { size: 'lg', rateId: b.id })}<span class="rating-val" data-rating-val>${fmtRating(b.rating)}</span></div>
+    <button class="btn primary block" data-act="close-sheet" style="margin-top:20px">Done</button>`);
+  return sheet;
+}
+
+function finishSessionSheet() {
+  const a = store.data.active;
+  const b = a && getBook(a.bookId);
+  if (!b) return;
+  const mins = sessionElapsed() / 60000;
+  let mode = b.progressMode === 'percent' ? 'percent' : 'page';
+  const cur = pagePos(b); const curPct = progressPct(b);
+  const sheet = openSheet(`${sheetHead('Nice session')}
+    <form id="fin-form" class="form" autocomplete="off">
+      <p class="muted" style="margin:-6px 4px 0">You read <b style="color:var(--text)">${esc(mins < 1 ? 'under a minute' : fmtMinutes(mins))}</b> of ${esc(b.title)}.</p>
+      <div class="seg"><button type="button" data-mode="page">Page</button><button type="button" data-mode="percent">Percent</button></div>
+      <label class="field"><span id="ff-label"></span><input class="input num" id="ff-value" type="number" inputmode="decimal" min="0" step="any" autofocus></label>
+      <label class="field"><span>Note</span><textarea class="input" id="ff-note" placeholder="Optional thought from this session" style="min-height:70px"></textarea></label>
+      <button class="btn primary block" type="submit">Save session</button>
+    </form>`);
+  const $ = (s) => sheet.querySelector(s);
+  const setMode = (m) => {
+    mode = m;
+    sheet.querySelectorAll('.seg button').forEach((x) => x.classList.toggle('on', x.dataset.mode === m));
+    $('#ff-label').textContent = m === 'page' ? (b.pages ? `What page are you on now? (of ${b.pages})` : 'What page are you on now?') : 'Percent complete now';
+    $('#ff-value').value = m === 'page' ? (cur ?? '') : (curPct != null ? Math.round(curPct) : '');
+  };
+  setMode(mode);
+  sheet.querySelector('.seg').addEventListener('click', (e) => { const x = e.target.closest('[data-mode]'); if (x) setMode(x.dataset.mode); });
+  $('#fin-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const raw = $('#ff-value').value;
+    const v = raw === '' ? null : Number(raw);
+    const pos = v == null || !Number.isFinite(v) ? {} : (mode === 'page' ? { page: v } : { percent: v });
+    if (mode === 'percent' && b.progressMode !== 'percent') updateBook(b.id, { progressMode: 'percent' });
+    const res = finishSession(pos, $('#ff-note').value);
+    if (ui.wakeLock) setWake(false);
+    closeSheet();
+    toast('Session saved');
+    if (ui.route.name === 'timer') go(`#/book/${b.id}`); else render(true);
+    if (res && res.reachedEnd) offerFinish(b.id);
+  });
+}
+
+function noteSheet(bookId, noteId = null) {
+  const b = getBook(bookId);
+  const n = noteId ? b.notes.find((x) => x.id === noteId) : null;
+  const sheet = openSheet(`${sheetHead(n ? 'Edit note' : 'New note')}
+    <form id="note-form" class="form">
+      <label class="field"><span>Page (leave empty for a note on the whole book)</span><input class="input num" id="nf-page" type="number" inputmode="numeric" min="0" value="${esc(n ? (n.page ?? '') : '')}" placeholder="${pagePos(b) ?? ''}"></label>
+      <label class="field"><span>Note</span><textarea class="input" id="nf-text" required autofocus style="min-height:150px">${esc(n ? n.text : '')}</textarea></label>
+      <button class="btn primary block" type="submit">Save note</button>
+      ${n ? '<button type="button" class="btn danger block" id="nf-del">Delete note</button>' : ''}
+    </form>`);
+  sheet.querySelector('#note-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = sheet.querySelector('#nf-text').value;
+    const page = sheet.querySelector('#nf-page').value;
+    if (!text.trim()) return;
+    if (n) updateNote(bookId, n.id, text, page); else addNote(bookId, text, page);
+    closeSheet();
+  });
+  if (n) sheet.querySelector('#nf-del').addEventListener('click', async () => {
+    if (await confirmSheet({ title: 'Delete this note?' })) { deleteNote(bookId, n.id); closeAllSheets(); }
+  });
+}
+
+function goalsSheet() {
+  const g = store.data.goals;
+  const sheet = openSheet(`${sheetHead('Reading goals')}
+    <form id="goal-form" class="form">
+      <label class="field"><span>Daily reading time (minutes)</span><input class="input num" id="gf-daily" type="number" inputmode="numeric" min="1" value="${g.dailyMinutes}" required></label>
+      <div class="grid-2">
+        <label class="field"><span>Books per month</span><input class="input num" id="gf-month" type="number" inputmode="numeric" min="1" value="${g.monthlyBooks}" required></label>
+        <label class="field"><span>Books per year</span><input class="input num" id="gf-year" type="number" inputmode="numeric" min="1" value="${g.yearlyBooks}" required></label>
+      </div>
+      <p class="muted small" style="margin:0 4px">Books count toward a month or year by the date you finished them.</p>
+      <button class="btn primary block" type="submit">Save goals</button>
+    </form>`);
+  sheet.querySelector('#goal-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const n = (id, fb) => Math.max(1, Math.round(Number(sheet.querySelector(id).value)) || fb);
+    store.data.goals = { dailyMinutes: n('#gf-daily', 30), monthlyBooks: n('#gf-month', 2), yearlyBooks: n('#gf-year', 24) };
+    store.save();
+    closeSheet();
+    toast('Goals saved');
+  });
+}
+
+function collectionFormSheet(c = null) {
+  let color = c ? c.color : COLL_COLORS[store.data.collections.length % COLL_COLORS.length];
+  const sheet = openSheet(`${sheetHead(c ? 'Edit collection' : 'New collection')}
+    <form id="coll-form" class="form" autocomplete="off">
+      <label class="field"><span>Name</span><input class="input" id="cf-name" value="${esc(c ? c.name : '')}" placeholder="e.g. Book club picks" required autofocus></label>
+      <label class="field"><span>Description</span><input class="input" id="cf-desc" value="${esc(c ? c.description : '')}" placeholder="Optional"></label>
+      <div class="field"><span>Color</span><div class="swatches">${COLL_COLORS.map((col) => `<button type="button" class="swatch ${col === color ? 'on' : ''}" style="--c:${col}" data-color="${col}" aria-label="Color ${col}"></button>`).join('')}</div></div>
+      <button class="btn primary block" type="submit">${c ? 'Save' : 'Create collection'}</button>
+      ${c ? '<button type="button" class="btn danger block" id="cf-del">Delete collection</button>' : ''}
+    </form>`);
+  sheet.querySelector('.swatches').addEventListener('click', (e) => {
+    const s = e.target.closest('[data-color]');
+    if (!s) return;
+    color = s.dataset.color;
+    sheet.querySelectorAll('.swatch').forEach((x) => x.classList.toggle('on', x === s));
+  });
+  sheet.querySelector('#coll-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = sheet.querySelector('#cf-name').value.trim();
+    const description = sheet.querySelector('#cf-desc').value.trim();
+    if (!name) return;
+    if (c) { updateCollection(c.id, { name, description, color }); closeSheet(); }
+    else { const nc = addCollection({ name, description, color }); closeSheet(); go(`#/collection/${nc.id}`); }
+  });
+  if (c) sheet.querySelector('#cf-del').addEventListener('click', async () => {
+    if (await confirmSheet({ title: `Delete "${c.name}"?`, message: 'The books stay in your library; only the collection goes.' })) {
+      deleteCollection(c.id); closeAllSheets(); back('#/collections');
+    }
+  });
+}
+
+function pickCollectionsSheet(bookId) {
+  const current = collectionsOf(bookId).map((c) => c.id);
+  const cs = store.data.collections;
+  const sheet = openSheet(`${sheetHead('Collections')}
+    <form id="pc-form" class="form">
+      ${cs.length ? `<div class="check-list">${cs.map((c) => `<label class="check-item"><input type="checkbox" value="${c.id}" ${current.includes(c.id) ? 'checked' : ''}><span style="width:12px;height:12px;border-radius:50%;background:${esc(c.color)};flex:none"></span><span class="info"><b>${esc(c.name)}</b></span></label>`).join('')}</div>` : '<p class="muted">No collections yet. Make one below.</p>'}
+      <div style="display:flex;gap:8px"><input class="input" id="pc-new" placeholder="New collection name" style="flex:1"><button type="button" class="btn" id="pc-add">Add</button></div>
+      <button class="btn primary block" type="submit">Done</button>
+    </form>`);
+  sheet.querySelector('#pc-add').addEventListener('click', () => {
+    const inp = sheet.querySelector('#pc-new');
+    if (!inp.value.trim()) return;
+    const nc = addCollection({ name: inp.value, color: COLL_COLORS[store.data.collections.length % COLL_COLORS.length] });
+    const ids = [...sheet.querySelectorAll('.check-list input:checked')].map((x) => x.value);
+    setBookCollections(bookId, [...ids, nc.id]);
+    closeSheet();
+    pickCollectionsSheet(bookId);
+  });
+  sheet.querySelector('#pc-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    setBookCollections(bookId, [...sheet.querySelectorAll('.check-list input:checked')].map((x) => x.value));
+    closeSheet();
+  });
+}
+
+function collAddBooksSheet(collId) {
+  const c = getCollection(collId);
+  const books = store.data.books.slice().sort((a, b) => a.title.localeCompare(b.title));
+  if (!books.length) { toast('Add some books to your library first'); return; }
+  const sheet = openSheet(`${sheetHead(`Books in ${c.name}`)}
+    <label class="search">${icon('search')}<input id="cab-q" type="search" placeholder="Filter"></label>
+    <form id="cab-form" class="form">
+      <div class="check-list">${books.map((b) => `<label class="check-item" data-t="${esc((b.title + ' ' + b.authors).toLowerCase())}"><input type="checkbox" value="${b.id}" ${c.bookIds.includes(b.id) ? 'checked' : ''}>${coverHtml(b, 'xs')}<span class="info"><b class="book-title">${esc(b.title)}</b><div class="muted small">${esc(b.authors)}</div></span></label>`).join('')}</div>
+      <button class="btn primary block" type="submit">Save</button>
+    </form>`);
+  sheet.querySelector('#cab-q').addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase();
+    sheet.querySelectorAll('.check-item').forEach((el) => { el.hidden = q && !el.dataset.t.includes(q); });
+  });
+  sheet.querySelector('#cab-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const ids = [...sheet.querySelectorAll('.check-list input:checked')].map((x) => x.value);
+    updateCollection(c.id, { bookIds: ids });
+    closeSheet();
+  });
+}
+
+function quickPickSheet(bookId, field) {
+  const b = getBook(bookId);
+  const list = field === 'format' ? FORMATS : OWNERSHIP;
+  const sheet = openSheet(`${sheetHead(field === 'format' ? 'Format' : 'Ownership')}
+    <div class="option-list">${list.map((o) => `<button class="option" data-pick="${esc(o)}"><b style="flex:1">${esc(o)}</b>${b[field] === o ? icon('check') : ''}</button>`).join('')}</div>`);
+  sheet.addEventListener('click', (e) => {
+    const p = e.target.closest('[data-pick]');
+    if (!p) return;
+    const patch = { [field]: p.dataset.pick };
+    if (field === 'format' && p.dataset.pick === 'Audiobook' && b.progressMode !== 'percent') patch.progressMode = 'percent';
+    updateBook(bookId, patch);
+    closeSheet();
+  });
+}
+
+// ======================================================================
+// Backup
+// ======================================================================
+async function exportData() {
+  if (PREVIEW) { toast('Backups work in your installed copy'); return; }
+  const payload = { app: 'lamplight', version: 1, exportedAt: new Date().toISOString(), data: store.data };
+  const json = JSON.stringify(payload, null, 2);
+  const name = `lamplight-backup-${todayKey()}.json`;
+  const file = new File([json], name, { type: 'application/json' });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'Lamplight backup' });
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(file); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }
+    store.data.settings.lastBackup = new Date().toISOString();
+    store.save();
+    toast('Backup ready. Save it to Files or iCloud Drive.');
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+    toast("The backup couldn't be saved. Try again.");
+  }
+}
+
+async function importData(file) {
+  try {
+    const parsed = JSON.parse(await file.text());
+    const data = parsed && parsed.data ? parsed.data : parsed;
+    if (!data || !Array.isArray(data.books)) throw new Error('bad');
+    const ok = await confirmSheet({ title: 'Restore this backup?', message: `It has ${plural(data.books.length, 'book')}. Everything currently in the app will be replaced.`, confirm: 'Restore', danger: true });
+    if (!ok) return;
+    store.replaceAll(data);
+    await store.flush();
+    toast('Backup restored');
+    render();
+  } catch (e) {
+    toast("That file isn't a Lamplight backup.");
+  }
+}
+
+// ======================================================================
+// Event wiring
+// ======================================================================
+const actions = {
+  'close-sheet': () => closeSheet(),
+  back: (el) => back(el.dataset.fallback || '#/library'),
+  'add-book': () => addBookSheet(),
+  'open-scan': () => { closeSheet(); scanSheet(); },
+  'open-search': () => { closeSheet(); searchSheet(); },
+  'open-manual': () => { closeSheet(); bookFormSheet({}, { isNew: true }); },
+  'manual-from-search': () => { const q = document.querySelector('#search-q'); const t = q ? q.value.trim() : ''; closeAllSheets(); bookFormSheet(extractIsbn(t) ? { isbn: cleanIsbn(t) } : { title: t }, { isNew: true }); },
+  'edit-book': (el) => bookFormSheet(getBook(el.dataset.id), { isNew: false }),
+  'fill-details': async (el) => {
+    const b = getBook(el.dataset.id);
+    if (!isOnline()) { toast("You're offline. Try again when connected."); return; }
+    el.disabled = true; el.textContent = 'Looking it up…';
+    try {
+      const r = await lookupForBook(b);
+      if (!r) { toast('No match found. You can write a description yourself.'); render(true); return; }
+      const patch = {};
+      ['about', 'subtitle', 'publisher', 'published', 'isbn', 'cover', 'authors'].forEach((k) => { if (!b[k] && r[k]) patch[k] = r[k]; });
+      if (!b.pages && r.pages) patch.pages = r.pages;
+      if (!b.genres.length && r.genres && r.genres.length) patch.genres = r.genres;
+      updateBook(b.id, patch);
+      toast(Object.keys(patch).length ? `Filled in ${plural(Object.keys(patch).length, 'field')}` : 'Nothing new found');
+    } catch (e) { toast(e.message); render(true); }
+  },
+  'set-status': (el) => {
+    const b = getBook(el.dataset.id);
+    const was = b.status;
+    updateBook(el.dataset.id, { status: el.dataset.status });
+    if (el.dataset.status === 'finished' && was !== 'finished' && !b.rating) rateAfterFinish(b.id);
+  },
+  'quick-pick': (el) => quickPickSheet(el.dataset.id, el.dataset.field),
+  'toggle-about': (el) => { ui.aboutOpen[el.dataset.id] = !ui.aboutOpen[el.dataset.id]; render(true); },
+  'rate-step': (el) => { const b = getBook(el.dataset.id); updateBook(b.id, { rating: Math.min(5, Math.max(0, (b.rating || 0) + Number(el.dataset.d))) }); },
+  'rate-clear': (el) => updateBook(el.dataset.id, { rating: 0 }),
+  'start-session': (el) => {
+    const a = store.data.active;
+    if (a && a.bookId !== el.dataset.id) {
+      const other = getBook(a.bookId);
+      toast(`Finish your session with "${other ? other.title : 'another book'}" first`, { action: 'Open', onAction: () => go('#/timer') });
+      return;
+    }
+    if (!a) startSession(el.dataset.id);
+    go('#/timer');
+  },
+  'update-progress': (el) => progressSheet(el.dataset.id, { past: !!el.dataset.past }),
+  'timer-pause': () => pauseSession(),
+  'timer-resume': () => resumeSession(),
+  'timer-finish': () => finishSessionSheet(),
+  'timer-cancel': async () => {
+    if (await confirmSheet({ title: 'Discard this session?', message: "The time won't be saved.", confirm: 'Discard' })) {
+      const id = store.data.active && store.data.active.bookId;
+      cancelSession(); if (ui.wakeLock) setWake(false); go(id ? `#/book/${id}` : '#/home');
+    }
+  },
+  'add-note': (el) => noteSheet(el.dataset.id),
+  'edit-note': (el) => noteSheet(el.dataset.id, el.dataset.note),
+  'delete-log': async (el) => { if (await confirmSheet({ title: 'Delete this entry?', message: 'It comes out of your stats. Your current page stays as it is.' })) deleteLog(el.dataset.log); },
+  'pick-collections': (el) => pickCollectionsSheet(el.dataset.id),
+  'new-collection': () => collectionFormSheet(),
+  'edit-collection': (el) => collectionFormSheet(getCollection(el.dataset.id)),
+  'coll-add-books': (el) => collAddBooksSheet(el.dataset.id),
+  'coll-remove': (el, e) => {
+    e.preventDefault(); e.stopPropagation();
+    const c = getCollection(el.dataset.coll);
+    updateCollection(c.id, { bookIds: c.bookIds.filter((x) => x !== el.dataset.id) });
+    toast('Removed from collection');
+  },
+  'edit-goals': () => goalsSheet(),
+  'lib-status': (el) => { ui.lib.status = el.dataset.status; render(true); },
+  'lib-filter': (el, e) => { e.preventDefault(); ui.lib = { ...ui.lib, status: el.dataset.status, q: '' }; go('#/library'); },
+  'clear-filters': () => { ui.lib = { q: '', status: 'all', own: 'all', format: 'all', genre: 'all', sort: ui.lib.sort }; render(true); },
+  'cal-move': (el) => {
+    const d = new Date(ui.cal.y, ui.cal.m + Number(el.dataset.d), 1);
+    ui.cal.y = d.getFullYear(); ui.cal.m = d.getMonth();
+    render(true);
+  },
+  'cal-day': (el) => { ui.cal.sel = el.dataset.key; render(true); },
+  export: () => exportData(),
+  'load-samples': () => { loadSamples(); toast('Example books added'); },
+  'remove-samples': async () => { if (await confirmSheet({ title: 'Remove example books?', message: 'Your own books stay put.', confirm: 'Remove' })) { removeSamples(); toast('Examples removed'); } },
+  'erase-all': async () => {
+    if (await confirmSheet({ title: 'Erase everything?', message: 'Every book, note, session and collection on this phone will be deleted. Save a backup first if you might want it back.', confirm: 'Erase everything' })) {
+      store.replaceAll(null); await store.flush(); toast('All data erased'); go('#/home');
+    }
+  },
+};
+
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act]');
+  if (el && actions[el.dataset.act]) {
+    if (el.tagName === 'A' && el.dataset.act !== 'lib-filter') e.preventDefault();
+    actions[el.dataset.act](el, e);
+    return;
+  }
+  const nav = e.target.closest('a[data-nav], #tabbar a');
+  if (nav && nav.getAttribute('href') && nav.getAttribute('href').startsWith('#')) {
+    e.preventDefault();
+    const href = nav.getAttribute('href');
+    if (nav.closest('#tabbar')) { ui.navDepth = 0; if (location.hash !== href) location.hash = href; else window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    else go(href);
+  }
+});
+
+document.addEventListener('input', (e) => {
+  if (e.target.dataset.input === 'lib-search') {
+    ui.lib.q = e.target.value;
+    const list = document.getElementById('lib-list');
+    if (list) list.innerHTML = libraryListHtml();
+  }
+});
+
+document.addEventListener('change', (e) => {
+  const k = e.target.dataset.change;
+  if (!k) return;
+  if (k === 'lib-own') { ui.lib.own = e.target.value; render(true); }
+  if (k === 'lib-format') { ui.lib.format = e.target.value; render(true); }
+  if (k === 'lib-genre') { ui.lib.genre = e.target.value; render(true); }
+  if (k === 'lib-sort') { ui.lib.sort = e.target.value; render(true); }
+  if (k === 'import' && e.target.files[0]) { importData(e.target.files[0]); e.target.value = ''; }
+  if (k === 'wake') setWake(e.target.checked);
+});
+
+// ---------- star rating: tap, drag, keyboard ----------
+let dragStars = null;
+function previewRating(el, v) {
+  paintStars(el, v);
+  const box = el.closest('.rating-box');
+  const out = box && box.querySelector('[data-rating-val]');
+  if (out) out.textContent = fmtRating(v);
+}
+document.addEventListener('pointerdown', (e) => {
+  const el = e.target.closest('[data-rate]');
+  if (!el) return;
+  e.preventDefault();
+  dragStars = el;
+  try { el.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  previewRating(el, starValueAt(el, e.clientX));
+});
+document.addEventListener('pointermove', (e) => { if (dragStars) previewRating(dragStars, starValueAt(dragStars, e.clientX)); });
+const endDrag = () => {
+  if (!dragStars) return;
+  const el = dragStars; dragStars = null;
+  updateBook(el.dataset.rate, { rating: Number(el.dataset.value) });
+};
+document.addEventListener('pointerup', endDrag);
+document.addEventListener('pointercancel', endDrag);
+document.addEventListener('keydown', (e) => {
+  const el = e.target.closest && e.target.closest('[data-rate]');
+  if (!el) return;
+  const d = { ArrowRight: 0.25, ArrowUp: 0.25, ArrowLeft: -0.25, ArrowDown: -0.25 }[e.key];
+  if (d == null) return;
+  e.preventDefault();
+  const v = Math.min(5, Math.max(0, Number(el.dataset.value) + d));
+  previewRating(el, v);
+  updateBook(el.dataset.rate, { rating: v });
+});
+
+// keep data safe when iOS suspends the app
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') store.flush();
+  else { tick(); if (ui.wantWake && store.data.active) setWake(true); }
+});
+window.addEventListener('pagehide', () => store.flush());
+
+// ======================================================================
+// Offline support (service worker) and start-up
+// ======================================================================
+function registerSW() {
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener('statechange', () => {
+        if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+          toast('A new version is ready', { action: 'Update', onAction: () => nw.postMessage('skipWaiting') });
+        }
+      });
+    });
+  }).catch(() => { /* offline support unavailable here */ });
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded) { reloaded = true; location.reload(); } });
+}
+
+async function start() {
+  await store.load();
+  store.listeners.add(scheduleRender);
+  ui.route = parseRoute();
+  render();
+  registerSW();
+  // settings screen shows whether storage is protected
+  new MutationObserver(() => showPersistState()).observe(view, { childList: true });
+  showPersistState();
+}
+start();
+
+// exposed for testing in the browser console
+window.lamplight = { store, render };
