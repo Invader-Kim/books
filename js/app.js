@@ -4,7 +4,7 @@ import {
   getBook, addBook, updateBook, deleteBook, findByIsbn, progressPct, pagePos, recordProgress, deleteLog,
   addNote, updateNote, deleteNote, getCollection, addCollection, updateCollection, deleteCollection,
   setBookCollections, collectionsOf, startSession, sessionElapsed, pauseSession, resumeSession,
-  cancelSession, finishSession, yearlyGoal,
+  cancelSession, finishSession, yearlyGoal, rememberEdition, applyEdition,
 } from './store.js';
 import {
   esc, icon, coverHtml, starsHtml, paintStars, fmtRating, starValueAt, ringHtml, openSheet, closeSheet,
@@ -16,7 +16,7 @@ import { startScanner, stopScanner, scanImageFile } from './scanner.js';
 import { loadSamples, removeSamples, hasSamples } from './sample.js';
 import { checkGoals, primeCelebrations, showCelebration } from './celebrate.js';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const view = document.getElementById('view');
 // The page scrolls inside #app (not the whole document) so the tab bar stays
 // pinned to the bottom of the screen on iPhone.
@@ -132,7 +132,6 @@ function viewHome() {
   const st = streaks();
   const now = new Date();
   const todayMin = minutesOn(todayKey());
-  const monthDone = finishedIn(now.getFullYear(), now.getMonth()).length;
   const yearDone = finishedIn(now.getFullYear(), null).length;
   const g = d.goals;
 
@@ -163,9 +162,8 @@ function viewHome() {
   <div class="up-next">${upNext.map((b) => `<a href="#/book/${b.id}" data-nav>${coverHtml(b, 'md')}<span>${esc(b.title)}</span></a>`).join('')}</div>` : ''}
 
   <h2 class="section">Goals <button data-act="edit-goals">Edit</button></h2>
-  <div class="goals ${g.monthlyBooks ? '' : 'two'}">
+  <div class="goals two">
     <button class="goal" data-act="edit-goals">${ringHtml(todayMin, g.dailyMinutes, { label: Math.round(todayMin), small: `of ${g.dailyMinutes} min` })}<div class="g-name">Today</div><div class="g-sub">reading</div></button>
-    ${g.monthlyBooks ? `<button class="goal" data-act="edit-goals">${ringHtml(monthDone, g.monthlyBooks, { label: monthDone, small: `of ${g.monthlyBooks}`, cls: 'teal' })}<div class="g-name">${esc(now.toLocaleDateString(undefined, { month: 'long' }))}</div><div class="g-sub">books</div></button>` : ''}
     <button class="goal" data-act="edit-goals">${ringHtml(yearDone, g.yearlyBooks, { label: yearDone, small: `of ${g.yearlyBooks}`, cls: 'sky' })}<div class="g-name"><span class="g-year">${now.getFullYear()}</span></div><div class="g-sub">books</div></button>
   </div>
   ${fab('add-book', 'Add a book')}`;
@@ -505,8 +503,7 @@ function viewSettings() {
   <h2 class="section">Reading goals</h2>
   <div class="settings-list">
     <button data-act="edit-goals"><span class="grow">Daily reading time</span><span class="val num">${g.dailyMinutes} min</span></button>
-    <button data-act="edit-goals"><span class="grow">Books per month</span><span class="val num">${g.monthlyBooks || 'Not set'}</span></button>
-    <button data-act="edit-goals"><span class="grow">Books per year</span><span class="val num">${g.yearlyBooks}${g.monthlyBooks ? ' <span class="faint small">(12 × monthly)</span>' : ''}</span></button>
+    <button data-act="edit-goals"><span class="grow">Books per year</span><span class="val num">${g.yearlyBooks}</span></button>
   </div>
 
   <h2 class="section">iPhone widget</h2>
@@ -770,6 +767,8 @@ function scanSheet() {
 // Sheet: add / edit book
 // ======================================================================
 function bookFormSheet(initial, { isNew = false, fromDb = false, note = '' } = {}) {
+  // a book you've added before comes back with the details you saved for it
+  if (isNew && initial && initial.isbn) initial = applyEdition(initial);
   const b = { title: '', subtitle: '', authors: '', about: '', pages: '', genres: [], format: 'Paperback', ownership: 'Owned', status: 'toread', isbn: '', publisher: '', published: '', startedAt: '', finishedAt: '', progressMode: 'pages', cover: '', ...initial };
   let cover = b.cover || '';
   const existingColl = isNew ? [] : collectionsOf(b.id).map((c) => c.id);
@@ -863,8 +862,9 @@ function bookFormSheet(initial, { isNew = false, fromDb = false, note = '' } = {
     const btn = $('#fill-btn');
     btn.disabled = true; btn.innerHTML = 'Looking it up…';
     try {
-      const r = await lookupForBook(probe);
-      if (!r) { toast('No match found. Check the title or ISBN.'); return; }
+      const found = await lookupForBook(probe);
+      if (!found) { toast('No match found. Check the title or ISBN.'); return; }
+      const r = applyEdition(found);
       let filled = 0;
       const fill = (sel, val) => { const el = $(sel); if (el && !el.value.trim() && val) { el.value = val; filled += 1; } };
       fill('#bf-title', r.title); fill('#bf-subtitle', r.subtitle); fill('#bf-authors', r.authors); fill('#bf-about', r.about);
@@ -894,6 +894,7 @@ function bookFormSheet(initial, { isNew = false, fromDb = false, note = '' } = {
     };
     const colls = fd.getAll('coll');
     if (!data.title) { toast('A title is needed'); return; }
+    rememberEdition(data);
     if (isNew) {
       const dup = findByIsbn(data.isbn);
       if (dup) {
@@ -1059,36 +1060,14 @@ function goalsSheet() {
   const sheet = openSheet(`${sheetHead('Reading goals')}
     <form id="goal-form" class="form">
       <label class="field"><span>Daily reading time (minutes)</span><input class="input num" id="gf-daily" type="number" inputmode="numeric" min="1" value="${g.dailyMinutes}" required></label>
-      <div class="grid-2">
-        <label class="field"><span>Books per month</span><input class="input num" id="gf-month" type="number" inputmode="numeric" min="1" value="${g.monthlyBooks || ''}" placeholder="Optional"></label>
-        <label class="field"><span>Books per year</span><input class="input num" id="gf-year" type="number" inputmode="numeric" min="1" value="${g.yearlyBooks}" required></label>
-      </div>
-      <p class="muted small" id="gf-hint" style="margin:0 4px"></p>
+      <label class="field"><span>Books per year</span><input class="input num" id="gf-year" type="number" inputmode="numeric" min="1" value="${g.yearlyBooks}" required></label>
+      <p class="muted small" style="margin:0 4px">Books count toward the year you finished them.</p>
       <button class="btn primary block" type="submit">Save goals</button>
     </form>`);
-  const month = sheet.querySelector('#gf-month');
-  const year = sheet.querySelector('#gf-year');
-  let ownYear = g.monthlyBooks ? '' : String(g.yearlyBooks);
-  const sync = () => {
-    const m = Math.round(Number(month.value));
-    if (m >= 1) {
-      year.value = m * 12; year.readOnly = true; year.classList.add('locked');
-      sheet.querySelector('#gf-hint').textContent = `Your yearly goal follows your monthly one: ${m} a month is ${m * 12} a year. Clear books per month to set the year yourself.`;
-    } else {
-      if (year.readOnly) year.value = ownYear || year.value;
-      year.readOnly = false; year.classList.remove('locked');
-      sheet.querySelector('#gf-hint').textContent = 'Books per month is optional. Leave it empty to only track a yearly goal. Books count by the date you finished them.';
-    }
-  };
-  year.addEventListener('input', () => { if (!year.readOnly) ownYear = year.value; });
-  month.addEventListener('input', sync);
-  sync();
   sheet.querySelector('#goal-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const n = (id, fb) => Math.max(1, Math.round(Number(sheet.querySelector(id).value)) || fb);
-    const m = Math.round(Number(month.value));
-    const monthlyBooks = m >= 1 ? m : null;
-    store.data.goals = { dailyMinutes: n('#gf-daily', 30), monthlyBooks, yearlyBooks: monthlyBooks ? monthlyBooks * 12 : n('#gf-year', 24) };
+    store.data.goals = { dailyMinutes: n('#gf-daily', 30), yearlyBooks: n('#gf-year', 24) };
     store.save();
     closeSheet();
     toast('Goals saved');
@@ -1260,7 +1239,6 @@ function widgetData() {
     day: todayKey(), month: todayKey().slice(0, 7), year: String(now.getFullYear()),
     monthName: now.toLocaleDateString(undefined, { month: 'short' }),
     todayMin: Math.round(minutesOn(todayKey())), dailyGoal: g.dailyMinutes, readToday: !!st.readToday, streak: st.current || 0,
-    monthDone: finishedIn(now.getFullYear(), now.getMonth()).length, monthGoal: g.monthlyBooks || null,
     yearDone: finishedIn(now.getFullYear(), null).length, yearGoal: yearlyGoal(),
     reading,
   };
@@ -1342,8 +1320,9 @@ const actions = {
     if (!isOnline()) { toast("You're offline. Try again when connected."); return; }
     el.disabled = true; el.textContent = 'Looking it up…';
     try {
-      const r = await lookupForBook(b);
-      if (!r) { toast('No match found. You can write a description yourself.'); render(true); return; }
+      const found = await lookupForBook(b);
+      if (!found) { toast('No match found. You can write a description yourself.'); render(true); return; }
+      const r = applyEdition(found);
       const patch = {};
       ['about', 'subtitle', 'publisher', 'published', 'isbn', 'cover', 'authors'].forEach((k) => { if (!b[k] && r[k]) patch[k] = r[k]; });
       if (!b.pages && r.pages) patch.pages = r.pages;
@@ -1507,22 +1486,47 @@ document.addEventListener('focusout', (e) => {
 // ======================================================================
 function registerSW() {
   if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
-  navigator.serviceWorker.register('sw.js').then((reg) => {
-    reg.addEventListener('updatefound', () => {
-      const nw = reg.installing;
-      if (!nw) return;
-      nw.addEventListener('statechange', () => {
-        if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-          toast('A new version is ready', { action: 'Update', onAction: () => nw.postMessage('skipWaiting') });
-        }
-      });
-    });
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+    // iPhone home-screen apps often resume instead of relaunching, so check for
+    // a new version every time the app comes back to the front
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    if (reg.waiting) reg.waiting.postMessage('skipWaiting');
   }).catch(() => { /* offline support unavailable here */ });
+  // A new version took over: reload into it, but never in the middle of a form.
   let reloaded = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded) { reloaded = true; location.reload(); } });
+  const reloadWhenIdle = () => {
+    if (reloaded) return;
+    if (document.querySelector('.sheet-wrap') && document.visibilityState === 'visible') { setTimeout(reloadWhenIdle, 1500); return; }
+    reloaded = true;
+    store.flush().finally(() => location.reload());
+  };
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) reloadWhenIdle(); });
 }
 
+// ======================================================================
+// Tab bar fit (iPhone)
+// ======================================================================
+// Some iOS versions give home-screen web apps a page that stops short of the
+// bottom of the screen, while still reporting the home-indicator inset. The tab
+// bar then adds that inset on top of the gap and floats. When the page is short,
+// drop the inset so the bar sits as low as iOS allows.
+function fitTabbar() {
+  const standalone = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  const portrait = window.innerHeight >= window.innerWidth;
+  const screenH = portrait ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
+  const gap = screenH - window.innerHeight;
+  const focusedField = document.activeElement && document.activeElement.matches && document.activeElement.matches('input, textarea, select');
+  if (focusedField) return; // the keyboard changes sizes; decide again once it closes
+  document.documentElement.classList.toggle('short-viewport', standalone && gap > 20);
+}
+window.addEventListener('resize', fitTabbar);
+window.addEventListener('orientationchange', () => setTimeout(fitTabbar, 300));
+document.addEventListener('focusout', () => setTimeout(fitTabbar, 400));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(fitTabbar, 200); });
+
 async function start() {
+  fitTabbar();
   await store.load();
   store.listeners.add(scheduleRender);
   store.listeners.add(checkGoals);
@@ -1538,4 +1542,4 @@ async function start() {
 start();
 
 // exposed for testing in the browser console
-window.lamplight = { store, render, widgetData: () => widgetData(), celebrate: () => showCelebration([{ title: 'Daily reading goal', text: 'This is a test of the celebration screen.', color: 'var(--gold)' }], store.data.settings.name) };
+window.lamplight = { store, render, version: APP_VERSION, widgetData: () => widgetData(), celebrate: () => showCelebration([{ title: 'Daily reading goal', text: 'This is a test of the celebration screen.', color: 'var(--gold)' }], store.data.settings.name) };

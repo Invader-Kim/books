@@ -26,7 +26,9 @@ export function defaultState() {
     books: [],
     collections: [],
     logs: [],
-    goals: { dailyMinutes: 30, monthlyBooks: 2, yearlyBooks: 24 },
+    goals: { dailyMinutes: 30, yearlyBooks: 24 },
+    // your corrections to book details, remembered by ISBN so re-adding a book keeps them
+    editions: {},
     active: null,
     settings: { lastBackup: null, name: '', askedName: false },
   };
@@ -121,10 +123,8 @@ function migrate(d) {
   if (!d || typeof d !== 'object') return base;
   const out = { ...base, ...d };
   out.goals = { ...base.goals, ...(d.goals || {}) };
-  // books per month is optional; when it's set, the yearly goal is always 12 × monthly
-  const m = Math.round(Number(out.goals.monthlyBooks));
-  out.goals.monthlyBooks = m >= 1 ? m : null;
-  if (out.goals.monthlyBooks) out.goals.yearlyBooks = out.goals.monthlyBooks * 12;
+  delete out.goals.monthlyBooks; // the monthly goal was removed in 1.3
+  out.editions = d.editions && typeof d.editions === 'object' ? d.editions : {};
   out.settings = { ...base.settings, ...(d.settings || {}) };
   out.books = Array.isArray(d.books) ? d.books.map(normalizeBook) : [];
   out.collections = Array.isArray(d.collections) ? d.collections.map((c) => ({ description: '', color: COLL_COLORS[0], bookIds: [], ...c })) : [];
@@ -132,10 +132,22 @@ function migrate(d) {
   return out;
 }
 
-/** The yearly book goal, kept in step with the monthly goal when there is one. */
-export function yearlyGoal() {
-  const g = store.data.goals;
-  return g.monthlyBooks ? g.monthlyBooks * 12 : g.yearlyBooks;
+export const yearlyGoal = () => store.data.goals.yearlyBooks;
+
+/** Details you saved for an ISBN (pages, publisher, published, authors). */
+const ED_FIELDS = ['pages', 'publisher', 'published', 'authors'];
+const isbnKey = (s) => String(s || '').replace(/[^0-9Xx]/g, '').toUpperCase();
+export function rememberEdition(book) {
+  const k = isbnKey(book.isbn);
+  if (k.length < 10) return;
+  const e = {};
+  ED_FIELDS.forEach((f) => { if (book[f] != null && book[f] !== '') e[f] = book[f]; });
+  store.data.editions[k] = e;
+}
+/** Overlay what you saved before for this ISBN, so the same book always comes back the same. */
+export function applyEdition(details) {
+  const e = store.data.editions[isbnKey(details && details.isbn)];
+  return e ? { ...details, ...e } : details;
 }
 
 // ---------- books ----------

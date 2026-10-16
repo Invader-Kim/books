@@ -11,7 +11,6 @@ import { esc, plural, fmtMinutes } from './ui.js';
 function periods(now = new Date()) {
   return {
     daily: todayKey(),
-    monthly: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
     yearly: String(now.getFullYear()),
   };
 }
@@ -20,13 +19,10 @@ function goalsMet() {
   const now = new Date();
   const g = store.data.goals;
   const min = minutesOn(todayKey());
-  const month = finishedIn(now.getFullYear(), now.getMonth()).length;
   const year = finishedIn(now.getFullYear(), null).length;
-  const monthName = now.toLocaleDateString(undefined, { month: 'long' });
   const yGoal = yearlyGoal();
   return [
     { id: 'daily', met: min >= g.dailyMinutes, title: 'Daily reading goal', text: `You read ${fmtMinutes(min)} today. Goal: ${g.dailyMinutes} min.`, color: 'var(--gold)' },
-    { id: 'monthly', met: !!g.monthlyBooks && month >= g.monthlyBooks, title: `${monthName} goal`, text: `${plural(month, 'book')} finished this month. Goal: ${g.monthlyBooks}.`, color: 'var(--teal)' },
     { id: 'yearly', met: year >= yGoal, title: `${now.getFullYear()} goal`, text: `${plural(year, 'book')} finished this year. Goal: ${yGoal}.`, color: 'var(--sky)' },
   ];
 }

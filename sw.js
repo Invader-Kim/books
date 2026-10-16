@@ -2,9 +2,10 @@
 // On first visit it saves a copy of every app file on the phone. After that the
 // app loads from that copy, with or without internet. Book covers are saved the
 // first time they are shown. Change VERSION whenever you edit any app file so
-// phones pick up the new copy.
+// phones pick up the new copy. A new version installs itself straight away
+// (no "Update" button needed) and the app reloads into it.
 
-const VERSION = 'lamplight-v1.2.0';
+const VERSION = 'lamplight-v1.3.0';
 const APP_CACHE = `${VERSION}-app`;
 const COVER_CACHE = 'lamplight-covers';
 
@@ -29,7 +30,11 @@ const APP_FILES = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(APP_CACHE).then((c) => c.addAll(APP_FILES)));
+  // cache: 'reload' skips the browser's own HTTP cache, so the new version never
+  // gets saved with old copies of files mixed in
+  event.waitUntil(caches.open(APP_CACHE)
+    .then((c) => c.addAll(APP_FILES.map((u) => new Request(u, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {

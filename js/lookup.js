@@ -2,6 +2,16 @@
 // Google Books (best for descriptions and genres) and Open Library (good for
 // page counts and covers). Results from both are merged; anything still
 // missing can be typed in by hand.
+//
+// Consistency rules (1.3):
+// - An ISBN identifies one exact edition, so details are always taken from an
+//   ISBN lookup when there is an ISBN, never from a loose title search.
+// - Google's ISBN search sometimes returns a different book; its answer is only
+//   used when the returned book really carries that ISBN.
+// - Edition facts (pages, publisher, date) come from Open Library's edition
+//   record first, Google second. Descriptions and genres prefer Google.
+// - Each ISBN's answer is remembered for this session, and app.js overlays any
+//   details you saved for that ISBN before (store.editions).
 
 const TIMEOUT = 12000;
 
@@ -101,9 +111,28 @@ function fromGoogle(vi = {}) {
   };
 }
 
+/** ISBN-10 and ISBN-13 forms of the same number, for matching. */
+function isbnForms(isbn) {
+  const s = cleanIsbn(isbn);
+  const forms = new Set([s]);
+  if (s.length === 10) {
+    const core = `978${s.slice(0, 9)}`;
+    const sum = core.split('').reduce((a, d, i) => a + Number(d) * (i % 2 ? 3 : 1), 0);
+    forms.add(core + ((10 - (sum % 10)) % 10));
+  } else if (s.length === 13 && s.startsWith('978')) {
+    const core = s.slice(3, 12);
+    const sum = core.split('').reduce((a, d, i) => a + Number(d) * (10 - i), 0);
+    const c = (11 - (sum % 11)) % 11;
+    forms.add(core + (c === 10 ? 'X' : String(c)));
+  }
+  return forms;
+}
+
 async function googleByIsbn(isbn) {
-  const data = await getJSON(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&maxResults=1`);
-  const item = data.items && data.items[0];
+  const data = await getJSON(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}&maxResults=5`);
+  const want = isbnForms(isbn);
+  const item = (data.items || []).find((it) => ((it.volumeInfo && it.volumeInfo.industryIdentifiers) || [])
+    .some((id) => want.has(cleanIsbn(id.identifier))));
   return item ? fromGoogle(item.volumeInfo) : null;
 }
 
@@ -115,7 +144,7 @@ async function openLibraryByIsbn(isbn) {
     title: r.title || '',
     subtitle: r.subtitle || '',
     authors: (r.authors || []).map((a) => a.name).join(', '),
-    pages: r.number_of_pages || null,
+    pages: r.number_of_pages || (r.pagination && Number.parseInt(r.pagination, 10)) || null,
     publisher: ((r.publishers || [])[0] || {}).name || '',
     published: r.publish_date || '',
     genres: genresFromSubjects(r.subjects),
@@ -145,22 +174,52 @@ async function openLibraryWorkDescription(workKey) {
   } catch (e) { return ''; }
 }
 
-function merge(primary, secondary) {
-  const out = { ...(secondary || {}) };
-  Object.entries(primary || {}).forEach(([k, v]) => {
-    const empty = v == null || v === '' || (Array.isArray(v) && !v.length);
-    if (!empty) out[k] = v;
+/** "Melissa Hill, Melissa Hill, Hill Melissa" -> "Melissa Hill" */
+function cleanAuthors(s) {
+  const words = (n) => n.toLowerCase().replace(/[^\p{L}\s]/gu, '').split(/\s+/).filter(Boolean);
+  let parts = String(s || '').split(/\s*[,;]\s*/).map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  // a lone "Hill, Melissa" is one person written last-name-first
+  if (parts.length === 2 && parts.every((x) => !x.includes(' '))) return `${parts[1]} ${parts[0]}`;
+  const sets = parts.map((x) => new Set(words(x)));
+  const out = []; const seen = new Set();
+  parts.forEach((name, i) => {
+    const key = [...sets[i]].sort().join(' ');
+    if (!key || seen.has(key)) return;
+    // drop fragments like "Hill" when "Melissa Hill" is also listed
+    if (sets.some((o, j) => j !== i && o.size > sets[i].size && [...sets[i]].every((w) => o.has(w)))) return;
+    seen.add(key); out.push(name);
   });
-  // Open Library's large cover is sharper than Google's thumbnail
-  if (secondary && secondary.cover) out.cover = secondary.cover;
-  if (!out.genres || !out.genres.length) out.genres = (secondary && secondary.genres) || [];
-  return out;
+  return out.join(', ');
 }
+
+const sanePages = (n) => { const v = Number(n); return v >= 16 && v <= 5000 ? Math.round(v) : null; };
+
+/** Merge an ISBN's two answers: edition facts from Open Library, the rest from Google. */
+function mergeIsbn(g, o) {
+  const pick = (...vals) => vals.find((v) => v != null && v !== '' && !(Array.isArray(v) && !v.length));
+  g = g || {}; o = o || {};
+  return {
+    title: pick(g.title, o.title) || '',
+    subtitle: pick(g.subtitle, o.subtitle) || '',
+    authors: cleanAuthors(pick(g.authors, o.authors) || ''),
+    about: pick(g.about) || '',
+    pages: pick(sanePages(o.pages), sanePages(g.pages)) || null,
+    genres: pick(g.genres, o.genres) || [],
+    publisher: pick(o.publisher, g.publisher) || '',
+    published: pick(o.published, g.published) || '',
+    cover: pick(o.cover, g.cover) || '',
+    isbn: pick(g.isbn, o.isbn) || '',
+    _olKey: o._olKey || '',
+  };
+}
+
+const isbnCache = new Map();
 
 /** Full details for one ISBN, or null if neither database knows it. */
 export async function lookupIsbn(isbnRaw) {
   const isbn = cleanIsbn(isbnRaw);
   if (!isbn) return null;
+  if (isbnCache.has(isbn)) return { ...isbnCache.get(isbn) };
   const [g, o] = await Promise.allSettled([googleByIsbn(isbn), openLibraryByIsbn(isbn)]);
   const gv = g.status === 'fulfilled' ? g.value : null;
   const ov = o.status === 'fulfilled' ? o.value : null;
@@ -168,11 +227,13 @@ export async function lookupIsbn(isbnRaw) {
     if (g.status === 'rejected' && o.status === 'rejected') throw new Error('Could not reach the book databases.');
     return null;
   }
-  const result = merge(gv, ov);
+  const result = mergeIsbn(gv, ov);
   if (!result.about && ov && ov._olKey) result.about = stripHtml(await openLibraryDescription(ov._olKey));
   delete result._olKey;
-  result.isbn = result.isbn || isbn;
-  return result;
+  result.isbn = isbn;
+  // only remember complete answers (a database that timed out could leave gaps)
+  if (g.status === 'fulfilled' && o.status === 'fulfilled') isbnCache.set(isbn, result);
+  return { ...result };
 }
 
 /** Search by title, author or ISBN. Returns a list of candidate books. */
@@ -223,11 +284,19 @@ export async function searchBooks(query) {
   return results;
 }
 
-/** Turn a search result into full details (adds description etc. if missing). */
+/** Turn a search result into full details. With an ISBN, the exact-edition lookup wins. */
 export async function completeResult(r) {
-  let out = { ...r };
-  if (!out.about && out.isbn) {
-    try { const full = await lookupIsbn(out.isbn); if (full) out = merge(out, full); } catch (e) { /* keep what we have */ }
+  let out = { ...r, authors: cleanAuthors(r.authors) };
+  if (out.isbn) {
+    try {
+      const full = await lookupIsbn(out.isbn);
+      if (full) {
+        // edition facts come only from the ISBN lookup; keep the search result's text if the lookup has none
+        out = { ...out, ...Object.fromEntries(Object.entries(full).filter(([, v]) => v != null && v !== '' && !(Array.isArray(v) && !v.length))) };
+        if (!full.pages) out.pages = null;
+        if (!full.publisher) out.publisher = '';
+      }
+    } catch (e) { /* keep what we have */ }
   }
   if (!out.about && out._workKey) out.about = stripHtml(await openLibraryWorkDescription(out._workKey));
   delete out._full; delete out._workKey; delete out._olKey;
