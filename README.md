@@ -83,10 +83,6 @@ Your books are stored in the app's private storage on the phone. Deleting the ap
 - **Library order:** sort by recently added, recently updated, title, author, rating, or **My order**, where you drag books by the ⠿ handle. Your choice is remembered. Collections can be sorted the same way: the Collections tab (my order, name, most books, newest) and the books inside each collection (my order, title, author, recently added, rating, reading status).
 - **Book details stay put.** Details you save are remembered by ISBN, so deleting and re-adding a book brings back your corrections.
 
-## Reading in Apple Books
-
-For books with the format **Ebook**, Lamplight shows **Read in Apple Books**, and starting a reading session can open Books for you (Settings › Apple Books). By default it opens your Books library. Apple offers no link to a specific EPUB or PDF you added yourself, so for "the book" mode Lamplight runs a one-time Shortcut called **Open in Books** that searches your Books library for the title. Setup steps are in Settings. If a PDF is named differently in Books, fill in the book's **Name in Apple Books** field. You can also set the default format for new books to Ebook there.
-
 ## Home Screen widget
 
 Apple only lets App Store apps make widgets, so Lamplight's widget runs in the free **Scriptable** app. Steps are in **Settings › iPhone widget**: copy the widget script, paste it into a new Scriptable script named **Lamplight Widget**, add a Scriptable widget to your Home Screen and pick that script, then tap **Update widget** in Lamplight whenever you want fresh numbers. Tapping the widget opens Safari, not the Home Screen app (an iOS limit); Safari shows a note pointing back to the app.

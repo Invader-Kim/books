@@ -194,8 +194,6 @@ body.timer-on .fab { bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 
 .book-row.dragging, .coll-card.dragging { position: relative; z-index: 5; box-shadow: 0 14px 34px rgba(2, 6, 20, .6); border-color: rgba(246, 192, 101, .5); transition: none; }
 .dragging .drag-handle { color: var(--gold); cursor: grabbing; }
 .row-remove { width: 36px; height: 36px; flex: none; }
-.btn.icon-only { flex: none !important; width: 44px; padding: 0; justify-content: center; }
-.btn.icon-only svg { width: 20px; height: 20px; margin: 0; }
 .sort-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 2px 12px; min-height: 40px; }
 .sort-row .sort-select { width: auto; flex: none; }
 .coll-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
