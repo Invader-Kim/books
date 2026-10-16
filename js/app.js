@@ -4,7 +4,7 @@ import {
   getBook, addBook, updateBook, deleteBook, findByIsbn, progressPct, pagePos, recordProgress, deleteLog,
   addNote, updateNote, deleteNote, getCollection, addCollection, updateCollection, deleteCollection,
   setBookCollections, collectionsOf, startSession, sessionElapsed, pauseSession, resumeSession,
-  cancelSession, finishSession,
+  cancelSession, finishSession, yearlyGoal,
 } from './store.js';
 import {
   esc, icon, coverHtml, starsHtml, paintStars, fmtRating, starValueAt, ringHtml, openSheet, closeSheet,
@@ -16,7 +16,7 @@ import { startScanner, stopScanner, scanImageFile } from './scanner.js';
 import { loadSamples, removeSamples, hasSamples } from './sample.js';
 import { checkGoals, primeCelebrations, showCelebration } from './celebrate.js';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const view = document.getElementById('view');
 // The page scrolls inside #app (not the whole document) so the tab bar stays
 // pinned to the bottom of the screen on iPhone.
@@ -163,10 +163,10 @@ function viewHome() {
   <div class="up-next">${upNext.map((b) => `<a href="#/book/${b.id}" data-nav>${coverHtml(b, 'md')}<span>${esc(b.title)}</span></a>`).join('')}</div>` : ''}
 
   <h2 class="section">Goals <button data-act="edit-goals">Edit</button></h2>
-  <div class="goals">
-    <button class="goal" data-act="edit-goals">${ringHtml(todayMin, g.dailyMinutes, { label: Math.round(todayMin), small: `of ${g.dailyMinutes} min` })}<div class="g-name">Today</div></button>
-    <button class="goal" data-act="edit-goals">${ringHtml(monthDone, g.monthlyBooks, { label: monthDone, small: `of ${g.monthlyBooks}`, cls: 'teal' })}<div class="g-name">${esc(now.toLocaleDateString(undefined, { month: 'long' }))}</div><div class="g-sub">books</div></button>
-    <button class="goal" data-act="edit-goals">${ringHtml(yearDone, g.yearlyBooks, { label: yearDone, small: `of ${g.yearlyBooks}`, cls: 'sky' })}<div class="g-name g-year">${now.getFullYear()}</div><div class="g-sub">books</div></button>
+  <div class="goals ${g.monthlyBooks ? '' : 'two'}">
+    <button class="goal" data-act="edit-goals">${ringHtml(todayMin, g.dailyMinutes, { label: Math.round(todayMin), small: `of ${g.dailyMinutes} min` })}<div class="g-name">Today</div><div class="g-sub">reading</div></button>
+    ${g.monthlyBooks ? `<button class="goal" data-act="edit-goals">${ringHtml(monthDone, g.monthlyBooks, { label: monthDone, small: `of ${g.monthlyBooks}`, cls: 'teal' })}<div class="g-name">${esc(now.toLocaleDateString(undefined, { month: 'long' }))}</div><div class="g-sub">books</div></button>` : ''}
+    <button class="goal" data-act="edit-goals">${ringHtml(yearDone, g.yearlyBooks, { label: yearDone, small: `of ${g.yearlyBooks}`, cls: 'sky' })}<div class="g-name"><span class="g-year">${now.getFullYear()}</span></div><div class="g-sub">books</div></button>
   </div>
   ${fab('add-book', 'Add a book')}`;
 }
@@ -476,7 +476,7 @@ function viewStats() {
 
   <h2 class="section">${now.getFullYear()} so far</h2>
   <div class="stat-grid">
-    <div class="stat"><div class="k">Books finished</div><div class="v">${yt.finished}<small>of ${store.data.goals.yearlyBooks}</small></div></div>
+    <div class="stat"><div class="k">Books finished</div><div class="v">${yt.finished}<small>of ${yearlyGoal()}</small></div></div>
     <div class="stat"><div class="k">Pages read</div><div class="v">${yt.pages.toLocaleString()}</div></div>
     <div class="stat"><div class="k">Time reading</div><div class="v">${Math.round(yt.seconds / 3600)}<small>hours</small></div></div>
     <div class="stat"><div class="k">Avg rating</div><div class="v">${yt.avgRating ? fmtRating(Math.round(yt.avgRating * 4) / 4) : '–'}<small>${yt.avgRating ? 'stars' : ''}</small></div></div>
@@ -492,6 +492,7 @@ function viewStats() {
 // Settings
 // ======================================================================
 function viewSettings() {
+  loadWidgetScript().catch(() => { widgetScript = null; });
   const d = store.data;
   const g = d.goals;
   return `
@@ -504,8 +505,23 @@ function viewSettings() {
   <h2 class="section">Reading goals</h2>
   <div class="settings-list">
     <button data-act="edit-goals"><span class="grow">Daily reading time</span><span class="val num">${g.dailyMinutes} min</span></button>
-    <button data-act="edit-goals"><span class="grow">Books per month</span><span class="val num">${g.monthlyBooks}</span></button>
-    <button data-act="edit-goals"><span class="grow">Books per year</span><span class="val num">${g.yearlyBooks}</span></button>
+    <button data-act="edit-goals"><span class="grow">Books per month</span><span class="val num">${g.monthlyBooks || 'Not set'}</span></button>
+    <button data-act="edit-goals"><span class="grow">Books per year</span><span class="val num">${g.yearlyBooks}${g.monthlyBooks ? ' <span class="faint small">(12 × monthly)</span>' : ''}</span></button>
+  </div>
+
+  <h2 class="section">iPhone widget</h2>
+  <div class="card small muted widget-help">
+    <p>Put your current book and goals on your Home Screen. Apple only lets App Store apps make widgets, so Lamplight's widget runs inside the free <b>Scriptable</b> app.</p>
+    <ol>
+      <li>Install <b>Scriptable</b> from the App Store.</li>
+      <li>Tap <b>Copy widget script</b> below. In Scriptable tap <b>+</b>, paste, then tap the title and name it exactly <b>Lamplight Widget</b>.</li>
+      <li>On your Home Screen, add a <b>Scriptable</b> widget (any size). Long-press it, choose <b>Edit Widget</b>, and set Script to <b>Lamplight Widget</b>.</li>
+      <li>Back here, tap <b>Update widget</b>. Do this whenever you want fresh numbers; Lamplight also offers it after you save progress.</li>
+    </ol>
+  </div>
+  <div class="settings-list" style="margin-top:12px">
+    <button data-act="copy-widget"><span class="grow">Copy widget script</span><span class="val">Step 2</span></button>
+    <button data-act="update-widget"><span class="grow">Update widget</span><span class="val">${d.settings.widgetUpdated ? `Last: ${esc(fmtDate(d.settings.widgetUpdated.slice(0, 10)))}` : 'Never'}</span></button>
   </div>
 
   <h2 class="section">Backup</h2>
@@ -956,7 +972,7 @@ function progressSheet(bookId, { past = false } = {}) {
     const min = Number($('#pf-min').value) || 0;
     const res = recordProgress(b.id, pos, { seconds: min * 60, date: $('#pf-date').value || todayKey(), note: $('#pf-note').value, type: 'manual' });
     closeSheet();
-    toast('Progress saved');
+    savedToast('Progress saved');
     if (res && res.reachedEnd) offerFinish(b.id);
   });
 }
@@ -1009,7 +1025,7 @@ function finishSessionSheet() {
     const res = finishSession(pos, $('#ff-note').value);
     if (ui.wakeLock) setWake(false);
     closeSheet();
-    toast('Session saved');
+    savedToast('Session saved');
     if (ui.route.name === 'timer') go(`#/book/${b.id}`); else render(true);
     if (res && res.reachedEnd) offerFinish(b.id);
   });
@@ -1044,16 +1060,35 @@ function goalsSheet() {
     <form id="goal-form" class="form">
       <label class="field"><span>Daily reading time (minutes)</span><input class="input num" id="gf-daily" type="number" inputmode="numeric" min="1" value="${g.dailyMinutes}" required></label>
       <div class="grid-2">
-        <label class="field"><span>Books per month</span><input class="input num" id="gf-month" type="number" inputmode="numeric" min="1" value="${g.monthlyBooks}" required></label>
+        <label class="field"><span>Books per month</span><input class="input num" id="gf-month" type="number" inputmode="numeric" min="1" value="${g.monthlyBooks || ''}" placeholder="Optional"></label>
         <label class="field"><span>Books per year</span><input class="input num" id="gf-year" type="number" inputmode="numeric" min="1" value="${g.yearlyBooks}" required></label>
       </div>
-      <p class="muted small" style="margin:0 4px">Books count toward a month or year by the date you finished them.</p>
+      <p class="muted small" id="gf-hint" style="margin:0 4px"></p>
       <button class="btn primary block" type="submit">Save goals</button>
     </form>`);
+  const month = sheet.querySelector('#gf-month');
+  const year = sheet.querySelector('#gf-year');
+  let ownYear = g.monthlyBooks ? '' : String(g.yearlyBooks);
+  const sync = () => {
+    const m = Math.round(Number(month.value));
+    if (m >= 1) {
+      year.value = m * 12; year.readOnly = true; year.classList.add('locked');
+      sheet.querySelector('#gf-hint').textContent = `Your yearly goal follows your monthly one: ${m} a month is ${m * 12} a year. Clear books per month to set the year yourself.`;
+    } else {
+      if (year.readOnly) year.value = ownYear || year.value;
+      year.readOnly = false; year.classList.remove('locked');
+      sheet.querySelector('#gf-hint').textContent = 'Books per month is optional. Leave it empty to only track a yearly goal. Books count by the date you finished them.';
+    }
+  };
+  year.addEventListener('input', () => { if (!year.readOnly) ownYear = year.value; });
+  month.addEventListener('input', sync);
+  sync();
   sheet.querySelector('#goal-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const n = (id, fb) => Math.max(1, Math.round(Number(sheet.querySelector(id).value)) || fb);
-    store.data.goals = { dailyMinutes: n('#gf-daily', 30), monthlyBooks: n('#gf-month', 2), yearlyBooks: n('#gf-year', 24) };
+    const m = Math.round(Number(month.value));
+    const monthlyBooks = m >= 1 ? m : null;
+    store.data.goals = { dailyMinutes: n('#gf-daily', 30), monthlyBooks, yearlyBooks: monthlyBooks ? monthlyBooks * 12 : n('#gf-year', 24) };
     store.save();
     closeSheet();
     toast('Goals saved');
@@ -1184,6 +1219,69 @@ function autogrow(el) {
 }
 
 // ======================================================================
+// iPhone widget (runs in the Scriptable app; see widget/lamplight-widget.js)
+// ======================================================================
+const WIDGET_SCRIPT_NAME = 'Lamplight Widget';
+let widgetScript = null;
+function loadWidgetScript() {
+  if (!widgetScript) widgetScript = fetch('widget/lamplight-widget.js').then((r) => { if (!r.ok) throw new Error('missing'); return r.text(); });
+  return widgetScript;
+}
+
+async function copyWidgetScript() {
+  try {
+    if (navigator.clipboard && window.ClipboardItem && navigator.clipboard.write) {
+      // Safari wants the copy to start right away inside the tap; it accepts a promise for the text.
+      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': loadWidgetScript().then((t) => new Blob([t], { type: 'text/plain' })) })]);
+    } else {
+      await navigator.clipboard.writeText(await loadWidgetScript());
+    }
+    toast('Widget script copied. Paste it into a new Scriptable script.');
+  } catch (e) {
+    widgetScript = null;
+    toast("Couldn't copy. Open the script link and copy it from there.", { action: 'Open', onAction: () => window.open('widget/lamplight-widget.js', '_blank') });
+  }
+}
+
+function widgetData() {
+  const d = store.data;
+  const g = d.goals;
+  const now = new Date();
+  const st = streaks();
+  const reading = d.books.filter((b) => b.status === 'reading')
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 3)
+    .map((b) => ({
+      title: b.title.slice(0, 80), author: (b.authors || '').slice(0, 60),
+      pct: progressPct(b) != null ? Math.round(progressPct(b)) : 0, progress: progressText(b),
+      cover: /^https:\/\//.test(b.cover || '') && b.cover.length < 400 ? b.cover : '',
+    }));
+  return {
+    v: 1, updatedAt: now.toISOString(), name: d.settings.name || '',
+    day: todayKey(), month: todayKey().slice(0, 7), year: String(now.getFullYear()),
+    monthName: now.toLocaleDateString(undefined, { month: 'short' }),
+    todayMin: Math.round(minutesOn(todayKey())), dailyGoal: g.dailyMinutes, readToday: !!st.readToday, streak: st.current || 0,
+    monthDone: finishedIn(now.getFullYear(), now.getMonth()).length, monthGoal: g.monthlyBooks || null,
+    yearDone: finishedIn(now.getFullYear(), null).length, yearGoal: yearlyGoal(),
+    reading,
+  };
+}
+
+function updateWidget() {
+  if (PREVIEW) { toast('The widget works from your installed copy'); return; }
+  store.data.settings.widgetUpdated = new Date().toISOString();
+  store.save();
+  store.flush();
+  const url = `scriptable:///run/${encodeURIComponent(WIDGET_SCRIPT_NAME)}?data=${encodeURIComponent(JSON.stringify(widgetData()))}`;
+  location.href = url;
+}
+
+/** After saving reading, offer a one-tap widget refresh once the widget is set up. */
+function savedToast(msg) {
+  if (store.data.settings.widgetUpdated) toast(msg, { action: 'Update widget', onAction: updateWidget });
+  else toast(msg);
+}
+
+// ======================================================================
 // Backup
 // ======================================================================
 async function exportData() {
@@ -1299,6 +1397,8 @@ const actions = {
   },
   'edit-goals': () => goalsSheet(),
   'edit-name': () => nameSheet(),
+  'copy-widget': () => copyWidgetScript(),
+  'update-widget': () => updateWidget(),
   'lib-status': (el) => { ui.lib.status = el.dataset.status; render(true); },
   'lib-filter': (el, e) => { e.preventDefault(); ui.lib = { ...ui.lib, status: el.dataset.status, q: '' }; go('#/library'); },
   'clear-filters': () => { ui.lib = { q: '', status: 'all', own: 'all', format: 'all', genre: 'all', sort: ui.lib.sort }; render(true); },
@@ -1438,4 +1538,4 @@ async function start() {
 start();
 
 // exposed for testing in the browser console
-window.lamplight = { store, render, celebrate: () => showCelebration([{ title: 'Daily reading goal', text: 'This is a test of the celebration screen.', color: 'var(--gold)' }], store.data.settings.name) };
+window.lamplight = { store, render, widgetData: () => widgetData(), celebrate: () => showCelebration([{ title: 'Daily reading goal', text: 'This is a test of the celebration screen.', color: 'var(--gold)' }], store.data.settings.name) };

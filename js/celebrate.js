@@ -3,7 +3,7 @@
 // month's books, this year's books). The first time one is met in its period,
 // a full-screen celebration appears. Each goal celebrates once per day / month /
 // year, remembered in store.data.settings.celebrated.
-import { store, todayKey } from './store.js';
+import { store, todayKey, yearlyGoal } from './store.js';
 import { minutesOn, finishedIn } from './stats.js';
 import { hasSamples } from './sample.js';
 import { esc, plural, fmtMinutes } from './ui.js';
@@ -23,10 +23,11 @@ function goalsMet() {
   const month = finishedIn(now.getFullYear(), now.getMonth()).length;
   const year = finishedIn(now.getFullYear(), null).length;
   const monthName = now.toLocaleDateString(undefined, { month: 'long' });
+  const yGoal = yearlyGoal();
   return [
     { id: 'daily', met: min >= g.dailyMinutes, title: 'Daily reading goal', text: `You read ${fmtMinutes(min)} today. Goal: ${g.dailyMinutes} min.`, color: 'var(--gold)' },
-    { id: 'monthly', met: month >= g.monthlyBooks, title: `${monthName} goal`, text: `${plural(month, 'book')} finished this month. Goal: ${g.monthlyBooks}.`, color: 'var(--teal)' },
-    { id: 'yearly', met: year >= g.yearlyBooks, title: `${now.getFullYear()} goal`, text: `${plural(year, 'book')} finished this year. Goal: ${g.yearlyBooks}.`, color: 'var(--sky)' },
+    { id: 'monthly', met: !!g.monthlyBooks && month >= g.monthlyBooks, title: `${monthName} goal`, text: `${plural(month, 'book')} finished this month. Goal: ${g.monthlyBooks}.`, color: 'var(--teal)' },
+    { id: 'yearly', met: year >= yGoal, title: `${now.getFullYear()} goal`, text: `${plural(year, 'book')} finished this year. Goal: ${yGoal}.`, color: 'var(--sky)' },
   ];
 }
 

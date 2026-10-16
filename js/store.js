@@ -121,11 +121,21 @@ function migrate(d) {
   if (!d || typeof d !== 'object') return base;
   const out = { ...base, ...d };
   out.goals = { ...base.goals, ...(d.goals || {}) };
+  // books per month is optional; when it's set, the yearly goal is always 12 × monthly
+  const m = Math.round(Number(out.goals.monthlyBooks));
+  out.goals.monthlyBooks = m >= 1 ? m : null;
+  if (out.goals.monthlyBooks) out.goals.yearlyBooks = out.goals.monthlyBooks * 12;
   out.settings = { ...base.settings, ...(d.settings || {}) };
   out.books = Array.isArray(d.books) ? d.books.map(normalizeBook) : [];
   out.collections = Array.isArray(d.collections) ? d.collections.map((c) => ({ description: '', color: COLL_COLORS[0], bookIds: [], ...c })) : [];
   out.logs = Array.isArray(d.logs) ? d.logs : [];
   return out;
+}
+
+/** The yearly book goal, kept in step with the monthly goal when there is one. */
+export function yearlyGoal() {
+  const g = store.data.goals;
+  return g.monthlyBooks ? g.monthlyBooks * 12 : g.yearlyBooks;
 }
 
 // ---------- books ----------

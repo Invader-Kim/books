@@ -4,7 +4,7 @@
 // first time they are shown. Change VERSION whenever you edit any app file so
 // phones pick up the new copy.
 
-const VERSION = 'lamplight-v1.1.0';
+const VERSION = 'lamplight-v1.2.0';
 const APP_CACHE = `${VERSION}-app`;
 const COVER_CACHE = 'lamplight-covers';
 
@@ -21,6 +21,7 @@ const APP_FILES = [
   'js/scanner.js',
   'js/sample.js',
   'js/celebrate.js',
+  'widget/lamplight-widget.js',
   'vendor/html5-qrcode.min.js',
   'icons/icon-192.png',
   'icons/icon-512.png',
