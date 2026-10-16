@@ -80,7 +80,7 @@ Your books are stored in the app's private storage on the phone. Deleting the ap
 - **Search tab:** results stay on the page while you check a book's details or add several. Tap **+** on a result to add it straight away (search a series name to add a whole series), or tap the book to review it first. Search sticks to English editions unless you turn that off in Settings.
 - **Adding several books:** in Scan, turn on **Keep scanning** to add a shelf of books one after another.
 - **Where details come from:** Google Books, Open Library and, for anything still missing, Apple Books. Goodreads and Amazon don't let apps read their data, so each book page has links to look it up there.
-- **Library order:** sort by recently added, recently updated, title, author, rating, or **My order**, where you drag books by the ⠿ handle. Your choice is remembered.
+- **Library order:** sort by recently added, recently updated, title, author, rating, or **My order**, where you drag books by the ⠿ handle. Your choice is remembered. Collections can be sorted the same way: the Collections tab (my order, name, most books, newest) and the books inside each collection (my order, title, author, recently added, rating, reading status).
 - **Book details stay put.** Details you save are remembered by ISBN, so deleting and re-adding a book brings back your corrections.
 
 ## Home Screen widget

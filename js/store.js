@@ -32,7 +32,7 @@ export function defaultState() {
     // your own drag-and-drop order for the library (book ids, top first)
     libraryOrder: [],
     active: null,
-    settings: { lastBackup: null, name: '', askedName: false, englishOnly: true },
+    settings: { lastBackup: null, name: '', askedName: false, englishOnly: true, collectionsSort: 'custom' },
   };
 }
 

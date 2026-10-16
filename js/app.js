@@ -16,7 +16,7 @@ import { startScanner, stopScanner, scanImageFile } from './scanner.js';
 import { loadSamples, removeSamples, hasSamples } from './sample.js';
 import { checkGoals, primeCelebrations, showCelebration } from './celebrate.js';
 
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.8.0';
 const view = document.getElementById('view');
 const timerBar = document.getElementById('timer-bar');
 
@@ -245,9 +245,8 @@ function libraryListHtml() {
   }
   if (!list.length) return `<div class="empty"><b>No matches</b>Try a different search or clear the filters.<div><button class="btn ghost" data-act="clear-filters">Clear filters</button></div></div>`;
   const custom = ui.lib.sort === 'custom';
-  const handle = (b) => `<button class="drag-handle" data-act="drag-noop" data-drag="${b.id}" aria-label="Drag to move ${esc(b.title)}">${icon('grip')}</button>`;
   return `<div class="muted small" style="margin:0 4px 8px">${plural(list.length, 'book')}${custom ? ' · drag <span class="grip-inline">⠿</span> to arrange' : ''}</div>
-    <div class="book-list ${custom ? 'sortable' : ''}" id="book-list">${list.map((b) => bookRow(b, custom ? handle(b) : '')).join('')}</div>`;
+    <div class="book-list" id="book-list" data-sort-kind="library">${list.map((b) => bookRow(b, custom ? dragHandle(b.id, b.title) : '')).join('')}</div>`;
 }
 
 function viewLibrary() {
@@ -402,29 +401,64 @@ function collStack(c) {
   const books = c.bookIds.map(getBook).filter(Boolean).slice(0, 3);
   return `<div class="coll-stack" style="--c:${esc(c.color)}">${books.map((b) => coverHtml(b, 'sm')).join('')}</div>`;
 }
+const dragHandle = (id, title) => `<button class="drag-handle" data-act="drag-noop" aria-label="Drag to move ${esc(title)}">${icon('grip')}</button>`;
+const sortSelect = (id, cur, options) => `<select id="${id}" class="input compact sort-select" aria-label="Sort">${options.map(([v, label]) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>`;
+
+const COLL_SORTS = [['custom', 'My order (drag)'], ['name', 'Name A–Z'], ['count', 'Most books'], ['recent', 'Newest first']];
+function sortedCollections() {
+  const cs = store.data.collections.slice();
+  const count = (c) => c.bookIds.filter(getBook).length;
+  const by = {
+    name: (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+    count: (a, b) => count(b) - count(a) || a.name.localeCompare(b.name),
+    recent: (a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''),
+  }[store.data.settings.collectionsSort];
+  return by ? cs.sort(by) : cs; // 'custom' is the saved order of the list itself
+}
+
 function viewCollections() {
-  const cs = store.data.collections;
+  const cs = sortedCollections();
+  const sort = store.data.settings.collectionsSort || 'custom';
+  const custom = sort === 'custom' && cs.length > 1;
   return `
   <div class="page-head"><h1>Collections</h1><span class="sub num">${plural(cs.length, 'collection')}</span></div>
-  ${cs.length ? `<div class="coll-grid">${cs.map((c) => `<a class="coll-card" href="#/collection/${c.id}" data-nav>${collStack(c)}
-      <div><div class="n">${esc(c.name)}</div><div class="c">${plural(c.bookIds.filter(getBook).length, 'book')}</div></div></a>`).join('')}</div>`
+  ${cs.length > 1 ? `<div class="sort-row"><span class="muted small">${custom ? 'Drag <span class="grip-inline">⠿</span> to arrange' : 'Sorted by'}</span>${sortSelect('coll-sort', sort, COLL_SORTS)}</div>` : ''}
+  ${cs.length ? `<div class="coll-grid" data-sort-kind="collections">${cs.map((c) => `<a class="coll-card" href="#/collection/${c.id}" data-nav data-id="${c.id}">${collStack(c)}
+      <div class="coll-meta"><div><div class="n">${esc(c.name)}</div><div class="c">${plural(c.bookIds.filter(getBook).length, 'book')}</div></div>${custom ? dragHandle(c.id, c.name) : ''}</div></a>`).join('')}</div>`
     : `<div class="empty"><b>Group books your way</b>Make collections like "Summer 2026", "Book club" or "Signed copies". A book can be in as many as you like.
       <div><button class="btn primary" data-act="new-collection">${icon('plus')}New collection</button></div></div>`}
   ${fab('new-collection', 'New collection')}`;
 }
 
+const BOOK_SORTS = [['custom', 'My order (drag)'], ['title', 'Title A–Z'], ['author', 'Author A–Z'], ['added', 'Recently added'], ['rating', 'Highest rated'], ['status', 'Reading status']];
+function sortedCollectionBooks(c) {
+  const books = c.bookIds.map(getBook).filter(Boolean);
+  const statusRank = (b) => ['reading', 'toread', 'wishlist', 'finished', 'dnf'].indexOf(b.status);
+  const by = {
+    title: (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }),
+    author: (a, b) => (a.authors || '~').localeCompare(b.authors || '~', undefined, { sensitivity: 'base' }),
+    added: (a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''),
+    rating: (a, b) => (b.rating || 0) - (a.rating || 0),
+    status: (a, b) => statusRank(a) - statusRank(b) || a.title.localeCompare(b.title),
+  }[c.sort];
+  return by ? books.sort(by) : books; // 'custom' is the order of the collection itself
+}
+
 function viewCollection(id) {
   const c = getCollection(id);
   if (!c) return `<div class="page-head">${backBtn('#/collections')}<h1>Not found</h1></div>`;
-  const books = c.bookIds.map(getBook).filter(Boolean);
+  const books = sortedCollectionBooks(c);
+  const sort = c.sort || 'custom';
+  const custom = sort === 'custom' && books.length > 1;
+  const remove = (b) => `<button class="icon-btn row-remove" data-act="coll-remove" data-coll="${c.id}" data-id="${b.id}" aria-label="Remove from collection">${icon('close')}</button>`;
   return `
   <div class="page-head">${backBtn('#/collections')}<div style="flex:1"></div>
     <button class="icon-btn" data-act="edit-collection" data-id="${c.id}" aria-label="Edit collection">${icon('pen')}</button></div>
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px"><span style="width:14px;height:14px;border-radius:50%;background:${esc(c.color)};flex:none"></span>
     <h1 class="book-title" style="font-size:28px;margin:0;line-height:1.15">${esc(c.name)}</h1></div>
   ${c.description ? `<p class="muted" style="margin:0 0 6px">${esc(c.description)}</p>` : ''}
-  <p class="faint small" style="margin:0 0 16px">${plural(books.length, 'book')}</p>
-  ${books.length ? `<div class="book-list">${books.map((b) => bookRow(b, `<button class="icon-btn" style="width:36px;height:36px" data-act="coll-remove" data-coll="${c.id}" data-id="${b.id}" aria-label="Remove from collection">${icon('close')}</button>`)).join('')}</div>`
+  <div class="sort-row"><span class="faint small">${plural(books.length, 'book')}${custom ? ' · drag <span class="grip-inline">⠿</span> to arrange' : ''}</span>${books.length > 1 ? sortSelect('cbook-sort', sort, BOOK_SORTS) : ''}</div>
+  ${books.length ? `<div class="book-list" data-sort-kind="collection" data-coll="${c.id}">${books.map((b) => bookRow(b, `${remove(b)}${custom ? dragHandle(b.id, b.title) : ''}`)).join('')}</div>`
     : `<div class="empty"><b>Empty for now</b>Add books from your library.<div><button class="btn primary" data-act="coll-add-books" data-id="${c.id}">${icon('plus')}Add books</button></div></div>`}
   ${fab('coll-add-books', 'Add books', `data-id="${c.id}"`)}`;
 }
@@ -1574,6 +1608,8 @@ document.addEventListener('submit', (e) => {
 
 document.addEventListener('change', (e) => {
   if (e.target.id === 'qa-status') ui.qaStatus = e.target.value;
+  if (e.target.id === 'coll-sort') { store.data.settings.collectionsSort = e.target.value; store.save(); }
+  if (e.target.id === 'cbook-sort') { const c = getCollection(ui.route.id); if (c) { c.sort = e.target.value; store.save(); } }
   const k = e.target.dataset.change;
   if (!k) return;
   if (k === 'lib-own') { ui.lib.own = e.target.value; render(true); }
@@ -1585,35 +1621,62 @@ document.addEventListener('change', (e) => {
   if (k === 'english-only') { store.data.settings.englishOnly = e.target.checked; store.save(); ui.search.state = 'idle'; ui.search.results = []; }
 });
 
-// ---------- library: drag and drop to arrange (My order) ----------
-// Drag a row by its handle. The row follows your finger; when it passes the
-// middle of a neighbour they swap places. The page scrolls when you drag near
-// the top or bottom edge. Letting go saves the new order.
+// ---------- drag and drop to arrange (My order) ----------
+// Works for the library list, the collections grid and the books in a collection.
+// Drag an item by its ⠿ handle: it follows your finger, and when your finger
+// passes the middle of another item they swap places. The page scrolls when you
+// drag near the top or bottom edge. Letting go saves the new order.
+const dropHandlers = {
+  library(ids) {
+    // put the visible books, in their new order, back into the slots they held in the full order
+    const all = store.data.books.slice().sort(byMyOrder).map((b) => b.id);
+    const shown = new Set(ids);
+    let i = 0;
+    store.data.libraryOrder = all.map((id) => (shown.has(id) ? ids[i++] : id));
+  },
+  collections(ids) {
+    const byId = new Map(store.data.collections.map((c) => [c.id, c]));
+    store.data.collections = [...ids.map((id) => byId.get(id)).filter(Boolean), ...store.data.collections.filter((c) => !ids.includes(c.id))];
+  },
+  collection(ids, list) {
+    const c = getCollection(list.dataset.coll);
+    if (c) c.bookIds = [...ids, ...c.bookIds.filter((id) => !ids.includes(id))];
+  },
+};
+
 function dragUpdate() {
   const d = dragging;
   if (!d) return;
-  const y = d.clientY + window.scrollY;
-  let dy = y - d.startY;
-  for (;;) {
-    const next = d.row.nextElementSibling;
-    const prev = d.row.previousElementSibling;
-    if (next && dy > (next.offsetHeight + d.gap) / 2) {
-      d.list.insertBefore(next, d.row);
-      d.startY += next.offsetHeight + d.gap; dy = y - d.startY;
-    } else if (prev && dy < -(prev.offsetHeight + d.gap) / 2) {
-      d.list.insertBefore(d.row, prev);
-      d.startY -= prev.offsetHeight + d.gap; dy = y - d.startY;
-    } else break;
+  const { el, list, x, y } = d;
+  // swap with the item under the finger once the finger is past its middle
+  const items = [...list.children].filter((c) => c.dataset && c.dataset.id);
+  const target = items.find((c) => {
+    if (c === el) return false;
+    const r = c.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  });
+  if (target) {
+    const from = items.indexOf(el); const to = items.indexOf(target);
+    const r = target.getBoundingClientRect();
+    const sameRow = Math.abs(r.top - (el.getBoundingClientRect().top - d.ty)) < r.height / 2;
+    const past = sameRow
+      ? (to > from ? x > r.left + r.width / 2 : x < r.left + r.width / 2)
+      : (to > from ? y > r.top + r.height / 2 : y < r.top + r.height / 2);
+    if (past) list.insertBefore(el, to > from ? target.nextSibling : target);
   }
-  d.row.style.transform = `translateY(${dy}px)`;
+  // keep the item under the finger wherever its slot is now
+  const r = el.getBoundingClientRect();
+  const naturalLeft = r.left - d.tx; const naturalTop = r.top - d.ty;
+  d.tx = x - d.grabX - naturalLeft; d.ty = y - d.grabY - naturalTop;
+  el.style.transform = `translate(${d.tx}px, ${d.ty}px)`;
 }
 function dragAutoScroll() {
   const d = dragging;
   if (!d) return;
   const bottomEdge = window.innerHeight - 110;
   let step = 0;
-  if (d.clientY < 90) step = -Math.ceil((90 - d.clientY) / 8);
-  else if (d.clientY > bottomEdge) step = Math.ceil((d.clientY - bottomEdge) / 8);
+  if (d.y < 90) step = -Math.ceil((90 - d.y) / 8);
+  else if (d.y > bottomEdge) step = Math.ceil((d.y - bottomEdge) / 8);
   if (step) { window.scrollBy(0, step); dragUpdate(); }
   d.raf = requestAnimationFrame(dragAutoScroll);
 }
@@ -1622,32 +1685,30 @@ function dragEnd() {
   if (!d) return;
   dragging = null;
   cancelAnimationFrame(d.raf);
-  d.row.style.transform = '';
-  d.row.classList.remove('dragging');
+  d.el.style.transform = '';
+  d.el.classList.remove('dragging');
   d.list.classList.remove('is-dragging');
-  // put the visible books, in their new order, back into the slots they held in the full order
-  const visible = [...d.list.querySelectorAll('.book-row[data-id]')].map((el) => el.dataset.id);
-  const all = store.data.books.slice().sort(byMyOrder).map((b) => b.id);
-  const shown = new Set(visible);
-  let i = 0;
-  store.data.libraryOrder = all.map((id) => (shown.has(id) ? visible[i++] : id));
-  store.save();
+  const ids = [...d.list.children].map((c) => c.dataset && c.dataset.id).filter(Boolean);
+  const save = dropHandlers[d.list.dataset.sortKind];
+  if (save) { save(ids, d.list); store.save(); }
   if (renderAfterDrag) { renderAfterDrag = false; scheduleRender(); }
 }
 document.addEventListener('pointerdown', (e) => {
   const h = e.target.closest('.drag-handle');
   if (!h) return;
+  const list = h.closest('[data-sort-kind]');
+  const el = list && [...list.children].find((c) => c.contains(h));
+  if (!el) return;
   e.preventDefault();
-  const row = h.closest('.book-row');
-  const list = row.parentElement;
-  dragging = { row, list, clientY: e.clientY, startY: e.clientY + window.scrollY, gap: parseFloat(getComputedStyle(list).rowGap) || 0, raf: 0 };
-  row.classList.add('dragging');
+  const r = el.getBoundingClientRect();
+  dragging = { el, list, x: e.clientX, y: e.clientY, grabX: e.clientX - r.left, grabY: e.clientY - r.top, tx: 0, ty: 0, raf: 0 };
+  el.classList.add('dragging');
   list.classList.add('is-dragging');
   try { h.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
   if (navigator.vibrate) { try { navigator.vibrate(10); } catch (err) { /* ignore */ } }
   dragging.raf = requestAnimationFrame(dragAutoScroll);
 });
-document.addEventListener('pointermove', (e) => { if (dragging) { dragging.clientY = e.clientY; dragUpdate(); } });
+document.addEventListener('pointermove', (e) => { if (dragging) { dragging.x = e.clientX; dragging.y = e.clientY; dragUpdate(); } });
 document.addEventListener('pointerup', dragEnd);
 document.addEventListener('pointercancel', dragEnd);
 
