@@ -188,6 +188,12 @@ body.timer-on .fab { bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 
 .book-row .a { color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .book-row .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 3px; }
 .book-row .chev { color: var(--faint); width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; flex: none; }
+.drag-handle { flex: none; align-self: stretch; width: 40px; margin: -6px -8px -6px 0; display: grid; place-items: center; border: 0; background: none; color: var(--faint); border-radius: var(--r-sm); touch-action: none; cursor: grab; -webkit-user-select: none; user-select: none; }
+.drag-handle svg { width: 22px; height: 22px; fill: currentColor; stroke: none; }
+.book-row.dragging { position: relative; z-index: 5; box-shadow: 0 14px 34px rgba(2, 6, 20, .6); border-color: rgba(246, 192, 101, .5); transition: none; }
+.book-row.dragging .drag-handle { color: var(--gold); cursor: grabbing; }
+.book-list.is-dragging { -webkit-user-select: none; user-select: none; }
+.grip-inline { color: var(--muted); }
 
 /* ---------- Pills & chips ---------- */
 .pill {
@@ -486,7 +492,22 @@ button.fact .v::after { content: " ›"; color: var(--faint); }
 .scan-hint { position: absolute; inset: auto 0 12px; text-align: center; color: #fff; font-size: 13px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,.7); pointer-events: none; }
 .scan-status { text-align: center; color: var(--muted); font-size: 14px; min-height: 22px; }
 
-.result { display: flex; gap: 12px; align-items: center; padding: 10px; border-radius: var(--r-md); background: var(--bg-deep); border: 1px solid var(--line); text-align: left; width: 100%; }
+.result { display: flex; gap: 8px; align-items: center; padding: 10px; border-radius: var(--r-md); background: var(--bg-deep); border: 1px solid var(--line); text-align: left; width: 100%; }
+.result-main { flex: 1; min-width: 0; display: flex; gap: 12px; align-items: center; padding: 0; border: 0; background: none; text-align: left; color: inherit; }
+.qa-btn { flex: none; width: 44px; height: 44px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--gold); color: var(--gold-ink); }
+.qa-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.4; }
+.qa-btn.done { background: rgba(98, 214, 196, .16); color: var(--teal); }
+.qa-btn.busy { background: var(--surface-3); }
+.mini-spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(234, 240, 255, .25); border-top-color: var(--text); animation: spin .8s linear infinite; }
+.qa-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 2px 4px; }
+.qa-bar select.input.compact { width: auto; min-width: 0; flex: none; }
+.qa-tip { margin: 6px 4px 0; line-height: 1.45; }
+.scan-keep { max-width: none; margin-top: 12px; }
+.scan-added { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 12px; padding: 12px 14px; border-radius: var(--r-md); background: rgba(98, 214, 196, .08); border: 1px solid rgba(98, 214, 196, .25); font-size: 14px; max-height: 180px; overflow-y: auto; }
+.scan-added b { color: var(--teal); }
+.ext-links { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 4px 0; }
+.scan-added span { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.scan-added svg { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--teal); stroke-width: 2.4; }
 .result .info { flex: 1; min-width: 0; }
 .result .t { font-family: var(--font-book); font-weight: 600; font-size: 16px; line-height: 1.2; }
 .spinner { width: 22px; height: 22px; border-radius: 50%; border: 3px solid var(--surface-3); border-top-color: var(--gold); animation: spin .8s linear infinite; margin: 20px auto; }

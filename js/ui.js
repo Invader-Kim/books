@@ -33,6 +33,7 @@ const P = {
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   flame: '<path d="M12 2.5c.6 3.2 4.8 5.6 4.8 10.4A4.8 4.8 0 0 1 12 17.7a4.8 4.8 0 0 1-4.8-4.8c0-1.9.9-3.3 1.9-4.4.2 1.5 1 2.6 2 2.9-.6-3.1.2-6.3.9-8.9zM12 21.5a6.6 6.6 0 0 1-6.6-6.6c0-.6.1-1.2.2-1.8a6.6 6.6 0 0 0 12.8 0c.1.6.2 1.2.2 1.8a6.6 6.6 0 0 1-6.6 6.6z"/>',
   more: '<circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/>',
+  grip: '<circle cx="9" cy="6.5" r="1.4"/><circle cx="15" cy="6.5" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="17.5" r="1.4"/><circle cx="15" cy="17.5" r="1.4"/>',
 };
 export const icon = (name, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${P[name] || ''}</svg>`;
 

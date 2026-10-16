@@ -77,6 +77,9 @@ Your books are stored in the app's private storage on the phone. Deleting the ap
 - **Streaks** count any day with logged reading. If you haven't read yet today, yesterday still keeps the streak alive.
 - **Goals:** daily reading minutes and books per year. Books count toward the year they were finished. Reaching a goal shows a celebration, once per day or year.
 - **Your name** is asked on first launch and can be changed in Settings.
+- **Adding several books:** in Search, tap **+** on each result to add it straight away (search a series name to add a whole series). In Scan, turn on **Keep scanning** to add a shelf of books one after another.
+- **Where details come from:** Google Books, Open Library and, for anything still missing, Apple Books. Goodreads and Amazon don't let apps read their data, so each book page has links to look it up there.
+- **Library order:** sort by recently added, recently updated, title, author, rating, or **My order**, where you drag books by the ⠿ handle. Your choice is remembered.
 - **Book details stay put.** Details you save are remembered by ISBN, so deleting and re-adding a book brings back your corrections.
 
 ## Home Screen widget

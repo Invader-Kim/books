@@ -29,6 +29,8 @@ export function defaultState() {
     goals: { dailyMinutes: 30, yearlyBooks: 24 },
     // your corrections to book details, remembered by ISBN so re-adding a book keeps them
     editions: {},
+    // your own drag-and-drop order for the library (book ids, top first)
+    libraryOrder: [],
     active: null,
     settings: { lastBackup: null, name: '', askedName: false },
   };
@@ -125,6 +127,7 @@ function migrate(d) {
   out.goals = { ...base.goals, ...(d.goals || {}) };
   delete out.goals.monthlyBooks; // the monthly goal was removed in 1.3
   out.editions = d.editions && typeof d.editions === 'object' ? d.editions : {};
+  out.libraryOrder = Array.isArray(d.libraryOrder) ? d.libraryOrder : [];
   out.settings = { ...base.settings, ...(d.settings || {}) };
   out.books = Array.isArray(d.books) ? d.books.map(normalizeBook) : [];
   out.collections = Array.isArray(d.collections) ? d.collections.map((c) => ({ description: '', color: COLL_COLORS[0], bookIds: [], ...c })) : [];

@@ -16,12 +16,14 @@ import { startScanner, stopScanner, scanImageFile } from './scanner.js';
 import { loadSamples, removeSamples, hasSamples } from './sample.js';
 import { checkGoals, primeCelebrations, showCelebration } from './celebrate.js';
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 const view = document.getElementById('view');
 const timerBar = document.getElementById('timer-bar');
 
 const ui = {
   lib: { q: '', status: 'all', own: 'all', format: 'all', genre: 'all', sort: 'added' },
+  qaStatus: 'toread',
+  keepScanning: false,
   cal: null,
   aboutOpen: {},
   navDepth: 0,
@@ -49,7 +51,10 @@ window.addEventListener('hashchange', () => {
 });
 
 let renderQueued = false;
+let dragging = null;
+let renderAfterDrag = false;
 function scheduleRender() {
+  if (dragging) { renderAfterDrag = true; return; }
   if (renderQueued) return;
   renderQueued = true;
   requestAnimationFrame(() => { renderQueued = false; render(true); });
@@ -87,7 +92,7 @@ const backBtn = (fallback) => `<button class="icon-btn" data-act="back" data-fal
 
 function bookRow(b, extra = '') {
   const pct = progressPct(b);
-  return `<a class="book-row" href="#/book/${b.id}" data-nav>
+  return `<a class="book-row" href="#/book/${b.id}" data-nav data-id="${b.id}">
     ${coverHtml(b, 'sm')}
     <div class="info">
       <div class="t">${esc(b.title)}</div>
@@ -208,9 +213,20 @@ function filteredBooks() {
     title: (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }),
     author: (a, b) => (a.authors || '~').localeCompare(b.authors || '~', undefined, { sensitivity: 'base' }),
     rating: (a, b) => (b.rating || 0) - (a.rating || 0),
-  }[f.sort];
+    custom: byMyOrder,
+  }[f.sort] || ((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''));
   list = list.slice().sort(by);
   return list;
+}
+
+/** Your drag-and-drop order. Books you haven't placed yet (new ones) go on top, newest first. */
+function byMyOrder(a, b) {
+  const order = store.data.libraryOrder;
+  const ia = order.indexOf(a.id); const ib = order.indexOf(b.id);
+  if (ia === -1 && ib === -1) return (b.addedAt || '').localeCompare(a.addedAt || '');
+  if (ia === -1) return -1;
+  if (ib === -1) return 1;
+  return ia - ib;
 }
 
 function allGenres() {
@@ -226,7 +242,10 @@ function libraryListHtml() {
       <div><button class="btn primary" data-act="add-book">${icon('plus')}Add a book</button></div></div>`;
   }
   if (!list.length) return `<div class="empty"><b>No matches</b>Try a different search or clear the filters.<div><button class="btn ghost" data-act="clear-filters">Clear filters</button></div></div>`;
-  return `<div class="muted small" style="margin:0 4px 8px">${plural(list.length, 'book')}</div><div class="book-list">${list.map((b) => bookRow(b)).join('')}</div>`;
+  const custom = ui.lib.sort === 'custom';
+  const handle = (b) => `<button class="drag-handle" data-act="drag-noop" data-drag="${b.id}" aria-label="Drag to move ${esc(b.title)}">${icon('grip')}</button>`;
+  return `<div class="muted small" style="margin:0 4px 8px">${plural(list.length, 'book')}${custom ? ' · drag <span class="grip-inline">⠿</span> to arrange' : ''}</div>
+    <div class="book-list ${custom ? 'sortable' : ''}" id="book-list">${list.map((b) => bookRow(b, custom ? handle(b) : '')).join('')}</div>`;
 }
 
 function viewLibrary() {
@@ -247,7 +266,7 @@ function viewLibrary() {
     <select id="f-own" class="input compact" data-change="lib-own" aria-label="Ownership">${opt('all', 'Any ownership', f.own)}${OWNERSHIP.map((o) => opt(o, o, f.own)).join('')}</select>
     <select id="f-format" class="input compact" data-change="lib-format" aria-label="Format">${opt('all', 'Any format', f.format)}${FORMATS.map((o) => opt(o, o, f.format)).join('')}</select>
     <select id="f-genre" class="input compact" data-change="lib-genre" aria-label="Genre">${opt('all', 'Any genre', f.genre)}${genres.map((o) => opt(o, o, f.genre)).join('')}</select>
-    <select id="f-sort" class="input compact" data-change="lib-sort" aria-label="Sort">${opt('added', 'Recently added', f.sort)}${opt('updated', 'Recently updated', f.sort)}${opt('title', 'Title A–Z', f.sort)}${opt('author', 'Author A–Z', f.sort)}${opt('rating', 'Highest rated', f.sort)}</select>
+    <select id="f-sort" class="input compact" data-change="lib-sort" aria-label="Sort">${opt('added', 'Recently added', f.sort)}${opt('updated', 'Recently updated', f.sort)}${opt('title', 'Title A–Z', f.sort)}${opt('author', 'Author A–Z', f.sort)}${opt('rating', 'Highest rated', f.sort)}${opt('custom', 'My order (drag)', f.sort)}</select>
   </div>
   <div id="lib-list">${libraryListHtml()}</div>
   ${fab('add-book', 'Add a book')}`;
@@ -342,6 +361,11 @@ function viewBook(id) {
     ${b.publisher ? `<div class="fact"><div class="k">Publisher</div><div class="v">${esc(b.publisher)}</div></div>` : ''}
     ${b.isbn ? `<div class="fact"><div class="k">ISBN</div><div class="v num">${esc(b.isbn)}</div></div>` : ''}
     ${totals.pagesPerHour ? `<div class="fact"><div class="k">Your speed</div><div class="v num">${Math.round(totals.pagesPerHour)} pages/h</div></div>` : ''}
+  </div>
+  <div class="ext-links">
+    <span class="faint small">Check details on</span>
+    <a class="btn small ghost" href="https://www.goodreads.com/search?q=${encodeURIComponent(b.isbn || `${b.title} ${b.authors}`)}" target="_blank" rel="noopener">Goodreads</a>
+    <a class="btn small ghost" href="https://www.amazon.com/s?i=stripbooks&k=${encodeURIComponent(b.isbn || `${b.title} ${b.authors}`)}" target="_blank" rel="noopener">Amazon</a>
   </div>
 
   <h2 class="section">Collections <button data-act="pick-collections" data-id="${b.id}">${colls.length ? 'Change' : 'Add'}</button></h2>
@@ -630,22 +654,49 @@ async function setWake(on) {
 function addBookSheet() {
   openSheet(`${sheetHead('Add a book')}
     <div class="option-list">
-      <button class="option" data-act="open-scan"><span class="ic">${icon('scan')}</span><span><b>Scan barcode or QR code</b><small>Point the camera at the barcode on the back cover</small></span></button>
-      <button class="option" data-act="open-search"><span class="ic">${icon('search')}</span><span><b>Search</b><small>Find it by title, author or ISBN</small></span></button>
+      <button class="option" data-act="open-scan"><span class="ic">${icon('scan')}</span><span><b>Scan barcode or QR code</b><small>Point the camera at the back cover. Turn on Keep scanning to add a whole shelf.</small></span></button>
+      <button class="option" data-act="open-search"><span class="ic">${icon('search')}</span><span><b>Search</b><small>By title, author, series or ISBN. Add several at once.</small></span></button>
       <button class="option" data-act="open-manual"><span class="ic">${icon('type')}</span><span><b>Type it in</b><small>Fill in the details yourself</small></span></button>
     </div>
     ${isOnline() ? '' : '<p class="muted small" style="margin:14px 4px 0">You\'re offline. Scanning still saves the ISBN, and you can fetch the details later.</p>'}`);
 }
 
+// ---------- quick add (several books in a row) ----------
+const normText = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+/** Same ISBN, or same title and first author, already in the library. */
+function findDuplicate(r) {
+  const byIsbn = findByIsbn(r.isbn);
+  if (byIsbn) return byIsbn;
+  const t = normText(r.title); const a = normText(String(r.authors || '').split(',')[0]);
+  return t ? store.data.books.find((b) => normText(b.title) === t && normText(String(b.authors || '').split(',')[0]) === a) || null : null;
+}
+const statusSelect = (id) => `<select class="input compact" id="${id}" aria-label="Add as">${STATUSES.map((st) => `<option value="${st.id}" ${st.id === ui.qaStatus ? 'selected' : ''}>${esc(st.label)}</option>`).join('')}</select>`;
+
+/** Add a book straight to the library with full details, no form. */
+async function quickAddBook(r) {
+  const dup = findDuplicate(r);
+  if (dup) return { dup };
+  let full = r;
+  try { full = await completeResult(r); } catch (e) { /* keep what the search gave us */ }
+  const book = addBook({ ...applyEdition(full), status: ui.qaStatus });
+  requestPersist();
+  return { book };
+}
+
 let searchResults = [];
 function searchSheet(initial = '') {
+  let added = 0;
   const sheet = openSheet(`${sheetHead('Search for a book')}
     <form id="search-form" class="form" autocomplete="off">
-      <label class="search" style="margin:0">${icon('search')}<input id="search-q" type="search" placeholder="Title, author or ISBN" value="${esc(initial)}" autofocus enterkeyhint="search"></label>
+      <label class="search" style="margin:0">${icon('search')}<input id="search-q" type="search" placeholder="Title, author, series or ISBN" value="${esc(initial)}" autofocus enterkeyhint="search"></label>
     </form>
-    <div id="search-results" class="stack" style="margin-top:14px"></div>`);
+    <div class="qa-bar"><span class="muted small">Tap <b>+</b> to add straight away as</span>${statusSelect('qa-status')}</div>
+    <p class="faint small qa-tip">Adding a series? Search its name, then tap + on each book you want. Tap a book itself to check its details first.</p>
+    <div id="search-results" class="stack" style="margin-top:6px"></div>`,
+  { onClose: () => { if (added) toast(`Added ${plural(added, 'book')}`); } });
   const form = sheet.querySelector('#search-form');
   const out = sheet.querySelector('#search-results');
+  sheet.querySelector('#qa-status').addEventListener('change', (e) => { ui.qaStatus = e.target.value; });
   const run = async () => {
     const q = sheet.querySelector('#search-q').value.trim();
     if (!q) return;
@@ -654,20 +705,35 @@ function searchSheet(initial = '') {
     try {
       searchResults = await searchBooks(q);
       if (!searchResults.length) { out.innerHTML = `<p class="muted">No books found for "${esc(q)}". <button class="link-btn" data-act="manual-from-search">Add it by hand</button></p>`; return; }
-      out.innerHTML = searchResults.map((r, i) => `<button class="result" data-pick-result="${i}">${coverHtml(r, 'sm')}<div class="info"><div class="t">${esc(r.title)}</div>
-        <div class="muted small">${esc(r.authors || 'Unknown author')}${r.published ? ` · ${esc(String(r.published).slice(0, 4))}` : ''}</div>
-        <div class="faint small">${[r.pages ? `${r.pages} pages` : '', r.isbn ? `ISBN ${esc(r.isbn)}` : ''].filter(Boolean).join(' · ')}</div></div></button>`).join('')
-        + `<button class="link-btn" data-act="manual-from-search" style="align-self:center">Not here? Add it by hand</button>`;
+      out.innerHTML = searchResults.map((r, i) => {
+        const have = !!findDuplicate(r);
+        return `<div class="result">
+          <button type="button" class="result-main" data-pick-result="${i}">${coverHtml(r, 'sm')}<div class="info"><div class="t">${esc(r.title)}</div>
+            <div class="muted small">${esc(r.authors || 'Unknown author')}${r.published ? ` · ${esc(String(r.published).slice(0, 4))}` : ''}</div>
+            <div class="faint small">${[r.pages ? `${r.pages} pages` : '', r.isbn ? `ISBN ${esc(r.isbn)}` : ''].filter(Boolean).join(' · ')}</div></div></button>
+          <button type="button" class="qa-btn ${have ? 'done' : ''}" data-quick-add="${i}" aria-label="${have ? 'Already in your library' : `Quick add ${esc(r.title)}`}" ${have ? 'disabled' : ''}>${icon(have ? 'check' : 'plus')}</button>
+        </div>`;
+      }).join('') + `<button class="link-btn" data-act="manual-from-search" style="align-self:center">Not here? Add it by hand</button>`;
     } catch (e) {
       out.innerHTML = `<p class="muted">${esc(e.message)} Check your connection and try again.</p>`;
     }
   };
   form.addEventListener('submit', (e) => { e.preventDefault(); sheet.querySelector('#search-q').blur(); run(); });
   out.addEventListener('click', async (e) => {
+    const qa = e.target.closest('[data-quick-add]');
+    if (qa) {
+      if (qa.disabled) return;
+      qa.disabled = true; qa.classList.add('busy'); qa.innerHTML = '<span class="mini-spin"></span>';
+      const res = await quickAddBook(searchResults[Number(qa.dataset.quickAdd)]);
+      qa.classList.remove('busy'); qa.classList.add('done'); qa.innerHTML = icon('check');
+      if (res.dup) toast(`"${res.dup.title}" is already in your library`);
+      else { added += 1; qa.setAttribute('aria-label', 'Added'); }
+      return;
+    }
     const btn = e.target.closest('[data-pick-result]');
     if (!btn) return;
     const r = searchResults[Number(btn.dataset.pickResult)];
-    const existing = findByIsbn(r.isbn);
+    const existing = findDuplicate(r);
     if (existing) { closeAllSheets(); toast('Already in your library'); go(`#/book/${existing.id}`); return; }
     btn.style.opacity = '.5';
     const full = await completeResult(r);
@@ -679,16 +745,27 @@ function searchSheet(initial = '') {
 
 function scanSheet() {
   let handled = false;
+  const addedTitles = [];
   const sheet = openSheet(`${sheetHead('Scan a book')}
     <div class="scan-box"><div id="reader"></div><div class="scan-hint" id="scan-hint">Line the barcode up inside the box</div></div>
     <p class="scan-status" id="scan-status">Starting camera…</p>
+    <label class="toggle-line scan-keep"><span><b>Keep scanning</b><br><span class="muted small">Adds each book straight away, then scans the next</span></span>
+      <span class="switch"><input type="checkbox" id="keep-scan" ${ui.keepScanning ? 'checked' : ''}><i></i></span></label>
+    <div class="qa-bar" id="keep-status" ${ui.keepScanning ? '' : 'hidden'}><span class="muted small">Add as</span>${statusSelect('scan-qa-status')}</div>
+    <div id="scan-added" class="scan-added" hidden></div>
     <form id="isbn-form" class="form" style="flex-direction:row;gap:8px" autocomplete="off">
       <input id="isbn-input" class="input" inputmode="numeric" placeholder="Or type the ISBN" style="flex:1">
       <button class="btn primary" type="submit">Look up</button>
     </form>
     <label class="btn ghost block" style="margin-top:10px">${icon('photo')}Scan from a photo instead<input type="file" id="scan-photo" accept="image/*" hidden></label>`,
-  { onClose: () => stopScanner() });
+  { onClose: () => { stopScanner(); if (addedTitles.length) toast(`Added ${plural(addedTitles.length, 'book')}`); } });
   const status = sheet.querySelector('#scan-status');
+  const keep = () => sheet.querySelector('#keep-scan').checked;
+  sheet.querySelector('#keep-scan').addEventListener('change', (e) => {
+    ui.keepScanning = e.target.checked;
+    sheet.querySelector('#keep-status').hidden = !ui.keepScanning;
+  });
+  sheet.querySelector('#scan-qa-status').addEventListener('change', (e) => { ui.qaStatus = e.target.value; });
 
   const handleText = async (text) => {
     if (handled) return;
@@ -701,8 +778,31 @@ function scanSheet() {
     }
     handleIsbn(isbn);
   };
+
+  // keep-scanning mode: add with defaults, list it, go straight back to the camera
+  const addAndContinue = async (isbn) => {
+    const existing = findByIsbn(isbn);
+    if (existing) {
+      status.innerHTML = `"${esc(existing.title)}" is already in your library.`;
+    } else {
+      status.innerHTML = `Found ISBN <b class="num">${esc(isbn)}</b>. Adding…`;
+      let r = null;
+      if (isOnline()) { try { r = await lookupIsbn(isbn); } catch (e) { r = null; } }
+      const details = r ? applyEdition(r) : applyEdition({ isbn, title: `ISBN ${isbn}` });
+      const book = addBook({ ...details, isbn: details.isbn || isbn, status: ui.qaStatus });
+      requestPersist();
+      addedTitles.push(book.title);
+      const list = sheet.querySelector('#scan-added');
+      list.hidden = false;
+      list.innerHTML = `<b>Added ${plural(addedTitles.length, 'book')}</b>${addedTitles.slice().reverse().map((t) => `<span>${icon('check')}${esc(t)}</span>`).join('')}`;
+      status.innerHTML = r ? `Added "${esc(book.title)}". Next book…` : `Saved ISBN ${esc(isbn)}. Open it later to fill in the details.`;
+    }
+    setTimeout(() => { if (sheet.isConnected) begin(); }, 1300);
+  };
+
   const handleIsbn = async (isbn) => {
     handled = true;
+    if (keep()) { addAndContinue(isbn); return; }
     const existing = findByIsbn(isbn);
     if (existing) { closeAllSheets(); toast('Already in your library'); go(`#/book/${existing.id}`); return; }
     if (!isOnline()) {
@@ -724,10 +824,10 @@ function scanSheet() {
 
   const begin = async () => {
     handled = false;
-    status.textContent = 'Starting camera…';
+    if (!status.textContent || /Starting/.test(status.textContent)) status.textContent = 'Starting camera…';
     try {
       await startScanner('reader', handleText);
-      status.textContent = 'Hold steady. It scans automatically.';
+      if (!keep() || !addedTitles.length) status.textContent = 'Hold steady. It scans automatically.';
     } catch (e) {
       const msg = String(e && (e.message || e));
       status.innerHTML = /permission|notallowed|denied/i.test(msg)
@@ -741,12 +841,14 @@ function scanSheet() {
     e.preventDefault();
     const v = cleanIsbn(sheet.querySelector('#isbn-input').value);
     if (v.length < 10) { status.textContent = 'An ISBN has 10 or 13 digits.'; return; }
+    sheet.querySelector('#isbn-input').value = '';
     stopScanner();
     handleIsbn(v);
   });
   sheet.querySelector('#scan-photo').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    e.target.value = '';
     await stopScanner();
     status.textContent = 'Reading the photo…';
     try {
@@ -755,6 +857,7 @@ function scanSheet() {
       handleText(text);
     } catch (err) {
       status.textContent = "Couldn't find a barcode in that photo. Try a closer, sharper shot.";
+      if (keep()) setTimeout(() => { if (sheet.isConnected) begin(); }, 1500);
     }
   });
   setTimeout(begin, 350);
@@ -1372,6 +1475,7 @@ const actions = {
   },
   'edit-goals': () => goalsSheet(),
   'edit-name': () => nameSheet(),
+  'drag-noop': (el, e) => { e.preventDefault(); e.stopPropagation(); },
   'copy-widget': () => copyWidgetScript(),
   'update-widget': () => updateWidget(),
   'lib-status': (el) => { ui.lib.status = el.dataset.status; render(true); },
@@ -1424,10 +1528,76 @@ document.addEventListener('change', (e) => {
   if (k === 'lib-own') { ui.lib.own = e.target.value; render(true); }
   if (k === 'lib-format') { ui.lib.format = e.target.value; render(true); }
   if (k === 'lib-genre') { ui.lib.genre = e.target.value; render(true); }
-  if (k === 'lib-sort') { ui.lib.sort = e.target.value; render(true); }
+  if (k === 'lib-sort') { ui.lib.sort = e.target.value; store.data.settings.librarySort = ui.lib.sort; store.save(); }
   if (k === 'import' && e.target.files[0]) { importData(e.target.files[0]); e.target.value = ''; }
   if (k === 'wake') setWake(e.target.checked);
 });
+
+// ---------- library: drag and drop to arrange (My order) ----------
+// Drag a row by its handle. The row follows your finger; when it passes the
+// middle of a neighbour they swap places. The page scrolls when you drag near
+// the top or bottom edge. Letting go saves the new order.
+function dragUpdate() {
+  const d = dragging;
+  if (!d) return;
+  const y = d.clientY + window.scrollY;
+  let dy = y - d.startY;
+  for (;;) {
+    const next = d.row.nextElementSibling;
+    const prev = d.row.previousElementSibling;
+    if (next && dy > (next.offsetHeight + d.gap) / 2) {
+      d.list.insertBefore(next, d.row);
+      d.startY += next.offsetHeight + d.gap; dy = y - d.startY;
+    } else if (prev && dy < -(prev.offsetHeight + d.gap) / 2) {
+      d.list.insertBefore(d.row, prev);
+      d.startY -= prev.offsetHeight + d.gap; dy = y - d.startY;
+    } else break;
+  }
+  d.row.style.transform = `translateY(${dy}px)`;
+}
+function dragAutoScroll() {
+  const d = dragging;
+  if (!d) return;
+  const bottomEdge = window.innerHeight - 110;
+  let step = 0;
+  if (d.clientY < 90) step = -Math.ceil((90 - d.clientY) / 8);
+  else if (d.clientY > bottomEdge) step = Math.ceil((d.clientY - bottomEdge) / 8);
+  if (step) { window.scrollBy(0, step); dragUpdate(); }
+  d.raf = requestAnimationFrame(dragAutoScroll);
+}
+function dragEnd() {
+  const d = dragging;
+  if (!d) return;
+  dragging = null;
+  cancelAnimationFrame(d.raf);
+  d.row.style.transform = '';
+  d.row.classList.remove('dragging');
+  d.list.classList.remove('is-dragging');
+  // put the visible books, in their new order, back into the slots they held in the full order
+  const visible = [...d.list.querySelectorAll('.book-row[data-id]')].map((el) => el.dataset.id);
+  const all = store.data.books.slice().sort(byMyOrder).map((b) => b.id);
+  const shown = new Set(visible);
+  let i = 0;
+  store.data.libraryOrder = all.map((id) => (shown.has(id) ? visible[i++] : id));
+  store.save();
+  if (renderAfterDrag) { renderAfterDrag = false; scheduleRender(); }
+}
+document.addEventListener('pointerdown', (e) => {
+  const h = e.target.closest('.drag-handle');
+  if (!h) return;
+  e.preventDefault();
+  const row = h.closest('.book-row');
+  const list = row.parentElement;
+  dragging = { row, list, clientY: e.clientY, startY: e.clientY + window.scrollY, gap: parseFloat(getComputedStyle(list).rowGap) || 0, raf: 0 };
+  row.classList.add('dragging');
+  list.classList.add('is-dragging');
+  try { h.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  if (navigator.vibrate) { try { navigator.vibrate(10); } catch (err) { /* ignore */ } }
+  dragging.raf = requestAnimationFrame(dragAutoScroll);
+});
+document.addEventListener('pointermove', (e) => { if (dragging) { dragging.clientY = e.clientY; dragUpdate(); } });
+document.addEventListener('pointerup', dragEnd);
+document.addEventListener('pointercancel', dragEnd);
 
 // ---------- star rating: tap, drag, keyboard ----------
 let dragStars = null;
@@ -1513,6 +1683,7 @@ function widgetInSafariNote() {
 async function start() {
   if (widgetInSafariNote()) return;
   await store.load();
+  ui.lib.sort = store.data.settings.librarySort || 'added';
   store.listeners.add(scheduleRender);
   store.listeners.add(checkGoals);
   ui.route = parseRoute();

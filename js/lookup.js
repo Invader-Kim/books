@@ -1,7 +1,9 @@
-// lookup.js: fills in book details from two free, keyless databases:
-// Google Books (best for descriptions and genres) and Open Library (good for
-// page counts and covers). Results from both are merged; anything still
-// missing can be typed in by hand.
+// lookup.js: fills in book details from free, keyless databases:
+// Google Books (best for descriptions and genres), Open Library (good for
+// page counts and covers) and, when something is still missing, Apple Books
+// (descriptions, genres and sharp covers). Anything still missing can be
+// typed in by hand. Goodreads and Amazon don't offer a way for apps to read
+// their data, so the book page links to them instead.
 //
 // Consistency rules (1.3):
 // - An ISBN identifies one exact edition, so details are always taken from an
@@ -192,6 +194,73 @@ function cleanAuthors(s) {
   return out.join(', ');
 }
 
+// ---------- Apple Books (iTunes Search API) ----------
+// Apple's search only answers other websites through "JSONP": a script tag that
+// calls back into the page. About 20 lookups a minute are allowed, so it's only
+// asked when Google and Open Library left a gap.
+let jsonpSeq = 0;
+function jsonp(url) {
+  return new Promise((resolve, reject) => {
+    const cb = `__lamplightApple${++jsonpSeq}`;
+    const s = document.createElement('script');
+    const done = () => { clearTimeout(timer); delete window[cb]; s.remove(); };
+    const timer = setTimeout(() => { done(); reject(new Error('timeout')); }, TIMEOUT);
+    window[cb] = (data) => { done(); resolve(data); };
+    s.onerror = () => { done(); reject(new Error('Apple Books could not be reached')); };
+    s.src = `${url}&callback=${cb}`;
+    document.head.appendChild(s);
+  });
+}
+
+const looseTitle = (t) => String(t || '').toLowerCase().replace(/\(.*?\)|:.*$/g, '').replace(/[^a-z0-9]/g, '');
+
+function fromApple(it) {
+  return {
+    title: it.trackName || '',
+    authors: it.artistName || '',
+    about: stripHtml(it.description),
+    genres: (it.genres || []).filter((g) => !/^(books|ebooks?)$/i.test(g)).slice(0, 4),
+    cover: it.artworkUrl100 ? it.artworkUrl100.replace(/\/\d+x\d+(bb)?\.(jpg|png)$/i, '/600x600bb.jpg') : '',
+  };
+}
+
+/** Apple Books details: by ISBN first, then by title + author with a careful match. */
+async function appleBooks({ isbn, title, authors }) {
+  try {
+    if (isbn) {
+      const d = await jsonp(`https://itunes.apple.com/lookup?isbn=${encodeURIComponent(cleanIsbn(isbn))}&country=US`);
+      const it = (d.results || []).find((x) => x.trackName);
+      if (it) return fromApple(it);
+    }
+    if (!title) return null;
+    const firstAuthor = String(authors || '').split(',')[0].trim();
+    const term = encodeURIComponent(`${title} ${firstAuthor}`.trim());
+    const d = await jsonp(`https://itunes.apple.com/search?term=${term}&media=ebook&entity=ebook&limit=10&country=US`);
+    const want = looseTitle(title);
+    const surname = firstAuthor.toLowerCase().split(/\s+/).pop() || '';
+    const it = (d.results || []).find((x) => {
+      const got = looseTitle(x.trackName);
+      const titleOk = got && want && (got === want || got.startsWith(want) || want.startsWith(got));
+      const authorOk = !surname || String(x.artistName || '').toLowerCase().includes(surname);
+      return titleOk && authorOk;
+    });
+    return it ? fromApple(it) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Fill gaps (description, cover, genres) from Apple Books without overwriting anything. */
+async function fillFromApple(out) {
+  if (out.about && out.cover && out.genres && out.genres.length) return out;
+  const ap = await appleBooks(out);
+  if (!ap) return out;
+  if (!out.about && ap.about) out.about = ap.about;
+  if (!out.cover && ap.cover) out.cover = ap.cover;
+  if ((!out.genres || !out.genres.length) && ap.genres.length) out.genres = ap.genres;
+  return out;
+}
+
 const sanePages = (n) => { const v = Number(n); return v >= 16 && v <= 5000 ? Math.round(v) : null; };
 
 /** Merge an ISBN's two answers: edition facts from Open Library, the rest from Google. */
@@ -228,6 +297,8 @@ export async function lookupIsbn(isbnRaw) {
     return null;
   }
   const result = mergeIsbn(gv, ov);
+  result.isbn = isbn;
+  await fillFromApple(result);
   if (!result.about && ov && ov._olKey) result.about = stripHtml(await openLibraryDescription(ov._olKey));
   delete result._olKey;
   result.isbn = isbn;
@@ -299,6 +370,7 @@ export async function completeResult(r) {
     } catch (e) { /* keep what we have */ }
   }
   if (!out.about && out._workKey) out.about = stripHtml(await openLibraryWorkDescription(out._workKey));
+  if (!out.about || !out.cover) await fillFromApple(out);
   delete out._full; delete out._workKey; delete out._olKey;
   return out;
 }
