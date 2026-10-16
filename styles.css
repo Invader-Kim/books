@@ -87,8 +87,9 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
   border-top: 1px solid var(--line);
 }
 #tabbar a {
-  flex: 1; max-width: 120px; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 6px 0; color: var(--faint); font-size: 11px; font-weight: 600; border-radius: var(--r-md);
+  flex: 1; min-width: 0; max-width: 110px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 0; color: var(--faint); font-size: 10.5px; font-weight: 600; border-radius: var(--r-md);
+  white-space: nowrap; letter-spacing: -0.01em;
 }
 #tabbar svg { width: 25px; height: 25px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 #tabbar a.active { color: var(--gold); }
@@ -501,7 +502,12 @@ button.fact .v::after { content: " ›"; color: var(--faint); }
 .mini-spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(234, 240, 255, .25); border-top-color: var(--text); animation: spin .8s linear infinite; }
 .qa-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 2px 4px; }
 .qa-bar select.input.compact { width: auto; min-width: 0; flex: none; }
-.qa-tip { margin: 6px 4px 0; line-height: 1.45; }
+.search-tools { display: flex; gap: 8px; margin: 12px 0 0; }
+.search-tools .btn svg { width: 18px; height: 18px; }
+.search-hints { padding: 18px 18px 8px; border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line); color: var(--muted); font-size: 15px; line-height: 1.5; }
+.search-hints p { margin: 0 0 10px; }
+.search-hints b { color: var(--text); }
+.settings-toggle { display: flex; align-items: center; gap: 12px; cursor: pointer; }
 .scan-keep { max-width: none; margin-top: 12px; }
 .scan-added { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 12px; padding: 12px 14px; border-radius: var(--r-md); background: rgba(98, 214, 196, .08); border: 1px solid rgba(98, 214, 196, .25); font-size: 14px; max-height: 180px; overflow-y: auto; }
 .scan-added b { color: var(--teal); }

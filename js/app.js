@@ -16,13 +16,14 @@ import { startScanner, stopScanner, scanImageFile } from './scanner.js';
 import { loadSamples, removeSamples, hasSamples } from './sample.js';
 import { checkGoals, primeCelebrations, showCelebration } from './celebrate.js';
 
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 const view = document.getElementById('view');
 const timerBar = document.getElementById('timer-bar');
 
 const ui = {
   lib: { q: '', status: 'all', own: 'all', format: 'all', genre: 'all', sort: 'added' },
   qaStatus: 'toread',
+  search: { q: '', lastQ: '', state: 'idle', results: [], busy: new Set(), error: '' },
   keepScanning: false,
   cal: null,
   aboutOpen: {},
@@ -67,6 +68,7 @@ function render(keepScroll = false) {
   switch (name) {
     case 'home': html = viewHome(); break;
     case 'library': html = viewLibrary(); break;
+    case 'search': html = viewSearch(); break;
     case 'book': html = viewBook(id); break;
     case 'collections': html = viewCollections(); break;
     case 'collection': html = viewCollection(id); break;
@@ -521,6 +523,12 @@ function viewSettings() {
     <button data-act="edit-name"><span class="grow">Your name</span><span class="val">${d.settings.name ? esc(d.settings.name) : 'Add'}</span></button>
   </div>
 
+  <h2 class="section">Search</h2>
+  <div class="settings-list">
+    <label class="settings-toggle"><span class="grow">English editions only<br><span class="faint small">Search and lookups stick to English books</span></span>
+      <span class="switch"><input type="checkbox" data-change="english-only" ${d.settings.englishOnly !== false ? 'checked' : ''}><i></i></span></label>
+  </div>
+
   <h2 class="section">Reading goals</h2>
   <div class="settings-list">
     <button data-act="edit-goals"><span class="grow">Daily reading time</span><span class="val num">${g.dailyMinutes} min</span></button>
@@ -672,75 +680,100 @@ function findDuplicate(r) {
 }
 const statusSelect = (id) => `<select class="input compact" id="${id}" aria-label="Add as">${STATUSES.map((st) => `<option value="${st.id}" ${st.id === ui.qaStatus ? 'selected' : ''}>${esc(st.label)}</option>`).join('')}</select>`;
 
-/** Add a book straight to the library with full details, no form. */
-async function quickAddBook(r) {
-  const dup = findDuplicate(r);
-  if (dup) return { dup };
-  let full = r;
-  try { full = await completeResult(r); } catch (e) { /* keep what the search gave us */ }
-  const book = addBook({ ...applyEdition(full), status: ui.qaStatus });
-  requestPersist();
-  return { book };
+// ======================================================================
+// Search (its own tab)
+// ======================================================================
+// Results live in ui.search, so they stay put while you check a book's details,
+// add a few, or switch tabs and come back.
+const englishOnly = () => store.data.settings.englishOnly !== false;
+
+function searchResultsHtml() {
+  const S = ui.search;
+  if (S.state === 'loading') return '<div class="spinner"></div>';
+  if (S.state === 'error') return `<p class="muted">${esc(S.error)} Check your connection and try again.</p>`;
+  if (S.state === 'offline') return `<p class="muted">You're offline, so search can't reach the book databases. <button class="link-btn" data-act="open-manual">Type it in instead</button></p>`;
+  if (S.state === 'empty') return `<p class="muted">No books found for "${esc(S.lastQ)}". <button class="link-btn" data-act="manual-from-search">Add it by hand</button></p>`;
+  if (S.state !== 'done') {
+    return `<div class="search-hints">
+      <p><b>Find any book</b> by title, author, series or ISBN.</p>
+      <p>Tap <b>+</b> to add a book straight away, or tap the book to check its details first. Adding a series? Search its name and tap + on each book.</p>
+      ${englishOnly() ? '<p class="faint small">Showing English editions. You can change this in Settings.</p>' : ''}
+    </div>`;
+  }
+  return S.results.map((r, i) => {
+    const have = !!findDuplicate(r);
+    const busy = S.busy.has(i);
+    return `<div class="result">
+      <button type="button" class="result-main" data-act="pick-result" data-i="${i}">${coverHtml(r, 'sm')}<div class="info"><div class="t">${esc(r.title)}</div>
+        <div class="muted small">${esc(r.authors || 'Unknown author')}${r.published ? ` · ${esc(String(r.published).slice(0, 4))}` : ''}</div>
+        <div class="faint small">${[r.pages ? `${r.pages} pages` : '', r.isbn ? `ISBN ${esc(r.isbn)}` : ''].filter(Boolean).join(' · ')}</div></div></button>
+      <button type="button" class="qa-btn ${have ? 'done' : ''} ${busy ? 'busy' : ''}" data-act="quick-add" data-i="${i}" aria-label="${have ? 'In your library' : `Quick add ${esc(r.title)}`}" ${have || busy ? 'disabled' : ''}>${busy ? '<span class="mini-spin"></span>' : icon(have ? 'check' : 'plus')}</button>
+    </div>`;
+  }).join('') + `<button class="link-btn" data-act="manual-from-search" style="align-self:center">Not here? Add it by hand</button>`;
 }
 
-let searchResults = [];
-function searchSheet(initial = '') {
-  let added = 0;
-  const sheet = openSheet(`${sheetHead('Search for a book')}
-    <form id="search-form" class="form" autocomplete="off">
-      <label class="search" style="margin:0">${icon('search')}<input id="search-q" type="search" placeholder="Title, author, series or ISBN" value="${esc(initial)}" autofocus enterkeyhint="search"></label>
-    </form>
-    <div class="qa-bar"><span class="muted small">Tap <b>+</b> to add straight away as</span>${statusSelect('qa-status')}</div>
-    <p class="faint small qa-tip">Adding a series? Search its name, then tap + on each book you want. Tap a book itself to check its details first.</p>
-    <div id="search-results" class="stack" style="margin-top:6px"></div>`,
-  { onClose: () => { if (added) toast(`Added ${plural(added, 'book')}`); } });
-  const form = sheet.querySelector('#search-form');
-  const out = sheet.querySelector('#search-results');
-  sheet.querySelector('#qa-status').addEventListener('change', (e) => { ui.qaStatus = e.target.value; });
-  const run = async () => {
-    const q = sheet.querySelector('#search-q').value.trim();
-    if (!q) return;
-    if (!isOnline()) { out.innerHTML = `<p class="muted">You're offline, so search can't reach the book databases. <button class="link-btn" data-act="manual-from-search">Type it in instead</button></p>`; return; }
-    out.innerHTML = '<div class="spinner"></div>';
-    try {
-      searchResults = await searchBooks(q);
-      if (!searchResults.length) { out.innerHTML = `<p class="muted">No books found for "${esc(q)}". <button class="link-btn" data-act="manual-from-search">Add it by hand</button></p>`; return; }
-      out.innerHTML = searchResults.map((r, i) => {
-        const have = !!findDuplicate(r);
-        return `<div class="result">
-          <button type="button" class="result-main" data-pick-result="${i}">${coverHtml(r, 'sm')}<div class="info"><div class="t">${esc(r.title)}</div>
-            <div class="muted small">${esc(r.authors || 'Unknown author')}${r.published ? ` · ${esc(String(r.published).slice(0, 4))}` : ''}</div>
-            <div class="faint small">${[r.pages ? `${r.pages} pages` : '', r.isbn ? `ISBN ${esc(r.isbn)}` : ''].filter(Boolean).join(' · ')}</div></div></button>
-          <button type="button" class="qa-btn ${have ? 'done' : ''}" data-quick-add="${i}" aria-label="${have ? 'Already in your library' : `Quick add ${esc(r.title)}`}" ${have ? 'disabled' : ''}>${icon(have ? 'check' : 'plus')}</button>
-        </div>`;
-      }).join('') + `<button class="link-btn" data-act="manual-from-search" style="align-self:center">Not here? Add it by hand</button>`;
-    } catch (e) {
-      out.innerHTML = `<p class="muted">${esc(e.message)} Check your connection and try again.</p>`;
-    }
-  };
-  form.addEventListener('submit', (e) => { e.preventDefault(); sheet.querySelector('#search-q').blur(); run(); });
-  out.addEventListener('click', async (e) => {
-    const qa = e.target.closest('[data-quick-add]');
-    if (qa) {
-      if (qa.disabled) return;
-      qa.disabled = true; qa.classList.add('busy'); qa.innerHTML = '<span class="mini-spin"></span>';
-      const res = await quickAddBook(searchResults[Number(qa.dataset.quickAdd)]);
-      qa.classList.remove('busy'); qa.classList.add('done'); qa.innerHTML = icon('check');
-      if (res.dup) toast(`"${res.dup.title}" is already in your library`);
-      else { added += 1; qa.setAttribute('aria-label', 'Added'); }
-      return;
-    }
-    const btn = e.target.closest('[data-pick-result]');
-    if (!btn) return;
-    const r = searchResults[Number(btn.dataset.pickResult)];
-    const existing = findDuplicate(r);
-    if (existing) { closeAllSheets(); toast('Already in your library'); go(`#/book/${existing.id}`); return; }
-    btn.style.opacity = '.5';
-    const full = await completeResult(r);
-    closeSheet();
-    bookFormSheet(full, { isNew: true, fromDb: true });
-  });
-  if (initial) run();
+function viewSearch() {
+  return `
+  <div class="page-head"><h1>Search</h1></div>
+  <form id="search-form" autocomplete="off">
+    <label class="search">${icon('search')}<input id="search-q" type="search" placeholder="Title, author, series or ISBN" value="${esc(ui.search.q)}" enterkeyhint="search" data-input="search-q"></label>
+  </form>
+  <div class="search-tools">
+    <button class="btn small" data-act="open-scan">${icon('scan')}Scan barcode</button>
+    <button class="btn small ghost" data-act="open-manual">${icon('type')}Type it in</button>
+  </div>
+  <div class="qa-bar"><span class="muted small">Tap <b>+</b> to add as</span>${statusSelect('qa-status')}</div>
+  <div id="search-results" class="stack">${searchResultsHtml()}</div>`;
+}
+
+const refreshResults = () => { const el = document.getElementById('search-results'); if (el) el.innerHTML = searchResultsHtml(); };
+
+let searchToken = 0;
+async function runSearch() {
+  const q = ui.search.q.trim();
+  if (!q) return;
+  const token = ++searchToken;
+  ui.search.lastQ = q;
+  ui.search.busy = new Set();
+  if (!isOnline()) { ui.search.state = 'offline'; refreshResults(); return; }
+  ui.search.state = 'loading'; refreshResults();
+  try {
+    const results = await searchBooks(q, { englishOnly: englishOnly() });
+    if (token !== searchToken) return;
+    ui.search.results = results;
+    ui.search.state = results.length ? 'done' : 'empty';
+  } catch (e) {
+    if (token !== searchToken) return;
+    ui.search.state = 'error'; ui.search.error = e.message;
+  }
+  refreshResults();
+}
+
+async function quickAddResult(i) {
+  const r = ui.search.results[i];
+  if (!r || ui.search.busy.has(i)) return;
+  const dup = findDuplicate(r);
+  if (dup) { toast(`"${dup.title}" is already in your library`); return; }
+  ui.search.busy.add(i); refreshResults();
+  let full = r;
+  try { full = await completeResult(r, { englishOnly: englishOnly() }); } catch (e) { /* keep what the search gave us */ }
+  const book = addBook({ ...applyEdition(full), status: ui.qaStatus });
+  requestPersist();
+  ui.search.busy.delete(i); refreshResults();
+  toast(`Added "${book.title}"`, { action: 'View', onAction: () => go(`#/book/${book.id}`) });
+}
+
+async function pickResult(i, btn) {
+  const r = ui.search.results[i];
+  if (!r) return;
+  const existing = findDuplicate(r);
+  if (existing) { go(`#/book/${existing.id}`); return; }
+  if (btn) btn.style.opacity = '.5';
+  let full = r;
+  try { full = await completeResult(r, { englishOnly: englishOnly() }); } catch (e) { /* keep what we have */ }
+  if (btn) btn.style.opacity = '';
+  // the form opens over the results; closing or saving it brings you straight back
+  bookFormSheet(full, { isNew: true, fromDb: true, stay: true });
 }
 
 function scanSheet() {
@@ -866,7 +899,7 @@ function scanSheet() {
 // ======================================================================
 // Sheet: add / edit book
 // ======================================================================
-function bookFormSheet(initial, { isNew = false, fromDb = false, note = '' } = {}) {
+function bookFormSheet(initial, { isNew = false, fromDb = false, note = '', stay = false } = {}) {
   // a book you've added before comes back with the details you saved for it
   if (isNew && initial && initial.isbn) initial = applyEdition(initial);
   const b = { title: '', subtitle: '', authors: '', about: '', pages: '', genres: [], format: 'Paperback', ownership: 'Owned', status: 'toread', isbn: '', publisher: '', published: '', startedAt: '', finishedAt: '', progressMode: 'pages', cover: '', ...initial };
@@ -1005,8 +1038,13 @@ function bookFormSheet(initial, { isNew = false, fromDb = false, note = '' } = {
       setBookCollections(nb.id, colls);
       requestPersist();
       closeAllSheets();
-      toast(`Added "${nb.title}"`);
-      go(`#/book/${nb.id}`);
+      if (stay) {
+        // added from Search: stay on the results so you can keep going
+        toast(`Added "${nb.title}"`, { action: 'View', onAction: () => go(`#/book/${nb.id}`) });
+      } else {
+        toast(`Added "${nb.title}"`);
+        go(`#/book/${nb.id}`);
+      }
     } else {
       updateBook(b.id, data);
       setBookCollections(b.id, colls);
@@ -1410,9 +1448,11 @@ const actions = {
   back: (el) => back(el.dataset.fallback || '#/library'),
   'add-book': () => addBookSheet(),
   'open-scan': () => { closeSheet(); scanSheet(); },
-  'open-search': () => { closeSheet(); searchSheet(); },
+  'open-search': () => { closeAllSheets(); go('#/search'); setTimeout(() => { const q = document.getElementById('search-q'); if (q) q.focus(); }, 80); },
+  'pick-result': (el) => pickResult(Number(el.dataset.i), el),
+  'quick-add': (el) => quickAddResult(Number(el.dataset.i)),
   'open-manual': () => { closeSheet(); bookFormSheet({}, { isNew: true }); },
-  'manual-from-search': () => { const q = document.querySelector('#search-q'); const t = q ? q.value.trim() : ''; closeAllSheets(); bookFormSheet(extractIsbn(t) ? { isbn: cleanIsbn(t) } : { title: t }, { isNew: true }); },
+  'manual-from-search': () => { const t = ui.search.q.trim(); closeAllSheets(); bookFormSheet(extractIsbn(t) ? { isbn: cleanIsbn(t) } : { title: t }, { isNew: true, stay: true }); },
   'edit-book': (el) => bookFormSheet(getBook(el.dataset.id), { isNew: false }),
   'fill-details': async (el) => {
     const b = getBook(el.dataset.id);
@@ -1515,6 +1555,7 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('input', (e) => {
   if (e.target.matches && e.target.matches('textarea[data-autogrow]')) autogrow(e.target);
+  if (e.target.dataset.input === 'search-q') ui.search.q = e.target.value;
   if (e.target.dataset.input === 'lib-search') {
     ui.lib.q = e.target.value;
     const list = document.getElementById('lib-list');
@@ -1522,7 +1563,17 @@ document.addEventListener('input', (e) => {
   }
 });
 
+document.addEventListener('submit', (e) => {
+  if (e.target.id !== 'search-form') return;
+  e.preventDefault();
+  const input = document.getElementById('search-q');
+  ui.search.q = input.value;
+  input.blur();
+  runSearch();
+});
+
 document.addEventListener('change', (e) => {
+  if (e.target.id === 'qa-status') ui.qaStatus = e.target.value;
   const k = e.target.dataset.change;
   if (!k) return;
   if (k === 'lib-own') { ui.lib.own = e.target.value; render(true); }
@@ -1531,6 +1582,7 @@ document.addEventListener('change', (e) => {
   if (k === 'lib-sort') { ui.lib.sort = e.target.value; store.data.settings.librarySort = ui.lib.sort; store.save(); }
   if (k === 'import' && e.target.files[0]) { importData(e.target.files[0]); e.target.value = ''; }
   if (k === 'wake') setWake(e.target.checked);
+  if (k === 'english-only') { store.data.settings.englishOnly = e.target.checked; store.save(); ui.search.state = 'idle'; ui.search.results = []; }
 });
 
 // ---------- library: drag and drop to arrange (My order) ----------

@@ -110,6 +110,7 @@ function fromGoogle(vi = {}) {
     published: (vi.publishedDate || '').slice(0, 10),
     isbn,
     cover: httpsCover((vi.imageLinks && (vi.imageLinks.thumbnail || vi.imageLinks.smallThumbnail)) || ''),
+    language: vi.language || '',
   };
 }
 
@@ -278,6 +279,7 @@ function mergeIsbn(g, o) {
     published: pick(o.published, g.published) || '',
     cover: pick(o.cover, g.cover) || '',
     isbn: pick(g.isbn, o.isbn) || '',
+    language: g.language || '',
     _olKey: o._olKey || '',
   };
 }
@@ -307,8 +309,10 @@ export async function lookupIsbn(isbnRaw) {
   return { ...result };
 }
 
-/** Search by title, author or ISBN. Returns a list of candidate books. */
-export async function searchBooks(query) {
+/** Search by title, author, series or ISBN. Returns a list of candidate books.
+ *  englishOnly (default) keeps to English editions: Google is limited to English
+ *  books, and Open Library results point at that book's English edition. */
+export async function searchBooks(query, { englishOnly = true } = {}) {
   const q = query.trim();
   if (!q) return [];
   const asIsbn = extractIsbn(q);
@@ -317,9 +321,11 @@ export async function searchBooks(query) {
     return one ? [{ ...one, _full: true }] : [];
   }
   const enc = encodeURIComponent(q);
+  const olQuery = encodeURIComponent(englishOnly ? `${q} language:eng` : q);
+  const olFields = 'key,title,subtitle,author_name,first_publish_year,isbn,cover_i,number_of_pages_median,subject,publisher,language,editions,editions.key,editions.title,editions.language,editions.isbn';
   const [g, o] = await Promise.allSettled([
-    getJSON(`https://www.googleapis.com/books/v1/volumes?q=${enc}&maxResults=20&printType=books`),
-    getJSON(`https://openlibrary.org/search.json?q=${enc}&limit=15&fields=key,title,subtitle,author_name,first_publish_year,isbn,cover_i,number_of_pages_median,subject,publisher`),
+    getJSON(`https://www.googleapis.com/books/v1/volumes?q=${enc}&maxResults=20&printType=books${englishOnly ? '&langRestrict=en' : ''}`),
+    getJSON(`https://openlibrary.org/search.json?q=${olQuery}&limit=15${englishOnly ? '&lang=en' : ''}&fields=${olFields}`),
   ]);
   if (g.status === 'rejected' && o.status === 'rejected') throw new Error('Could not reach the book databases.');
   const results = [];
@@ -329,23 +335,33 @@ export async function searchBooks(query) {
     (g.value.items || []).forEach((it) => {
       const r = { ...fromGoogle(it.volumeInfo), _full: true };
       if (!r.title || seen.has(keyOf(r))) return;
+      if (englishOnly && r.language && r.language !== 'en') return;
       seen.add(keyOf(r));
       results.push(r);
     });
   }
   if (o.status === 'fulfilled') {
     (o.value.docs || []).forEach((d) => {
+      // The work's own ISBN list mixes every edition (translations included), so
+      // only trust the ISBN of the edition Open Library matched for us.
+      const ed = d.editions && d.editions.docs && d.editions.docs[0];
+      const edEnglish = ed && (!ed.language || ed.language.includes('eng'));
+      let isbn = '';
+      if (ed && (edEnglish || !englishOnly)) isbn = (ed.isbn || []).find((x) => x.length === 13) || (ed.isbn || [])[0] || '';
+      if (!englishOnly && !isbn) isbn = (d.isbn || []).find((x) => x.length === 13) || (d.isbn || [])[0] || '';
+      if (englishOnly && ed && !edEnglish) return;
       const r = {
-        title: d.title || '',
+        title: (edEnglish && ed.title) || d.title || '',
         subtitle: d.subtitle || '',
         authors: (d.author_name || []).slice(0, 3).join(', '),
         published: d.first_publish_year ? String(d.first_publish_year) : '',
         pages: d.number_of_pages_median || null,
-        isbn: (d.isbn || []).find((x) => x.length === 13) || (d.isbn || [])[0] || '',
+        isbn,
         cover: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg` : '',
         genres: genresFromSubjects(d.subject || []),
-        publisher: (d.publisher || [])[0] || '',
+        publisher: '',
         _workKey: d.key,
+        _editionKey: ed && edEnglish ? ed.key : '',
       };
       if (!r.title || seen.has(keyOf(r))) return;
       seen.add(keyOf(r));
@@ -355,23 +371,45 @@ export async function searchBooks(query) {
   return results;
 }
 
-/** Turn a search result into full details. With an ISBN, the exact-edition lookup wins. */
-export async function completeResult(r) {
+/** One Open Library edition's own facts (used when a search result has no ISBN). */
+async function openLibraryEdition(key) {
+  try {
+    const ed = await getJSON(`https://openlibrary.org${key}.json`);
+    return {
+      isbn: (ed.isbn_13 || [])[0] || (ed.isbn_10 || [])[0] || '',
+      pages: ed.number_of_pages || null,
+      publisher: (ed.publishers || [])[0] || '',
+      published: ed.publish_date || '',
+    };
+  } catch (e) { return null; }
+}
+
+/** Turn a search result into full details. With an ISBN, the exact-edition lookup wins,
+ *  but the title and author you picked always stay, and (with englishOnly) a lookup
+ *  that turns out to be a non-English edition is ignored. */
+export async function completeResult(r, { englishOnly = true } = {}) {
   let out = { ...r, authors: cleanAuthors(r.authors) };
+  if (!out.isbn && out._editionKey) {
+    const ed = await openLibraryEdition(out._editionKey);
+    if (ed) Object.entries(ed).forEach(([k, v]) => { if (v && !out[k]) out[k] = v; });
+  }
   if (out.isbn) {
     try {
-      const full = await lookupIsbn(out.isbn);
+      let full = await lookupIsbn(out.isbn);
+      if (full && englishOnly && full.language && full.language !== 'en') full = null;
       if (full) {
+        const picked = { title: out.title, authors: out.authors };
         // edition facts come only from the ISBN lookup; keep the search result's text if the lookup has none
         out = { ...out, ...Object.fromEntries(Object.entries(full).filter(([, v]) => v != null && v !== '' && !(Array.isArray(v) && !v.length))) };
         if (!full.pages) out.pages = null;
         if (!full.publisher) out.publisher = '';
+        if (picked.title) Object.assign(out, picked);
       }
     } catch (e) { /* keep what we have */ }
   }
   if (!out.about && out._workKey) out.about = stripHtml(await openLibraryWorkDescription(out._workKey));
   if (!out.about || !out.cover) await fillFromApple(out);
-  delete out._full; delete out._workKey; delete out._olKey;
+  delete out._full; delete out._workKey; delete out._olKey; delete out._editionKey; delete out.language;
   return out;
 }
 
