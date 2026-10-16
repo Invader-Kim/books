@@ -47,13 +47,16 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
+/* The document itself never scrolls; #app is the scroll area. This keeps the
+   tab bar pinned to the very bottom on iPhone (iOS can otherwise leave it
+   floating above a gap after the keyboard has been open). */
+html, body { height: 100%; overflow: hidden; }
 body {
   font-family: var(--font-ui);
   font-size: 16px;
   line-height: 1.45;
-  min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
-  overscroll-behavior-y: none;
+  overscroll-behavior: none;
 }
 body::before {
   content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px);
@@ -67,14 +70,19 @@ img { max-width: 100%; display: block; }
 :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: var(--r-sm); }
 svg { stroke-linecap: round; stroke-linejoin: round; }
 
-#app { max-width: 620px; margin: 0 auto; position: relative; }
+#app {
+  position: fixed; inset: 0;
+  overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: none;
+}
 #view {
+  max-width: 620px; margin: 0 auto;
   padding-top: calc(env(safe-area-inset-top, 0px) + 12px);
   padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 96px);
   padding-left: var(--gutter-l);
   padding-right: var(--gutter-r);
   outline: none;
-  min-height: 100dvh;
+  min-height: 100%;
 }
 
 /* ---------- Tab bar ---------- */
@@ -86,6 +94,8 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
   backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
   border-top: 1px solid var(--line);
 }
+/* safety net: the bar's color continues past the bottom edge, so no strip of page shows below it */
+#tabbar::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 120px; background: inherit; }
 #tabbar a {
   flex: 1; max-width: 120px; display: flex; flex-direction: column; align-items: center; gap: 2px;
   padding: 6px 0; color: var(--faint); font-size: 11px; font-weight: 600; border-radius: var(--r-md);
@@ -246,6 +256,8 @@ select.input {
 }
 select.input.compact { min-height: 40px; padding: 8px 30px 8px 12px; border-radius: var(--r-pill); font-size: 16px; background-position: right 10px center; background-color: var(--surface); }
 textarea.input { min-height: 110px; resize: vertical; line-height: 1.5; }
+/* About grows to fit its text (see autogrow in app.js) so it doesn't need inner scrolling */
+textarea.input.about-input { min-height: 220px; overflow: hidden; resize: none; }
 .input:focus { border-color: var(--gold); }
 input[type="date"].input { min-height: 48px; }
 .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -318,7 +330,8 @@ input[type="date"].input { min-height: 48px; }
 .bar.thin { height: 6px; }
 
 /* ---------- Home ---------- */
-.hello h1 { font-family: var(--font-book); font-size: 32px; font-weight: 600; margin: 4px 0 2px; }
+.hello h1 { font-family: var(--font-book); font-size: 32px; line-height: 1.15; font-weight: 600; margin: 4px 0 2px; text-wrap: balance; overflow-wrap: anywhere; }
+.hello-name { color: var(--gold); }
 .reading-scroller { display: flex; flex-direction: column; gap: 12px; }
 .reading-card {
   width: 100%;
@@ -332,18 +345,20 @@ input[type="date"].input { min-height: 48px; }
 .reading-card .pct-line { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin-top: auto; }
 
 .goals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.goal { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px 8px 14px; border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line); text-align: center; }
-.ring { position: relative; width: 78px; height: 78px; }
+.goal { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 18px 6px 16px; border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line); text-align: center; min-width: 0; }
+.ring { position: relative; width: min(100px, 100%); aspect-ratio: 1; height: auto; }
 .ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
 .ring circle { fill: none; stroke-width: 8; }
 .ring .track { stroke: var(--bg-deep); }
 .ring .val { stroke: var(--gold); transition: stroke-dashoffset .6s ease; }
 .ring.teal .val { stroke: var(--teal); }
 .ring.sky .val { stroke: var(--sky); }
-.ring .lbl { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 800; font-size: 17px; font-variant-numeric: tabular-nums; }
-.ring .lbl small { display: block; font-size: 10px; color: var(--muted); font-weight: 700; margin-top: -2px; }
-.goal .g-name { font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.goal .g-sub { font-size: 12px; color: var(--faint); margin-top: -4px; }
+.ring .lbl { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--font-num); font-weight: 800; font-size: 24px; line-height: 1.1; font-variant-numeric: lining-nums tabular-nums; }
+.ring .lbl small { display: block; font-size: 11px; line-height: 1.2; color: var(--muted); font-weight: 700; margin-top: 1px; white-space: nowrap; letter-spacing: -0.01em; }
+.goal .g-name { font-size: 13px; line-height: 1.2; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+/* digits read smaller than capital letters at the same size, so the year gets a touch more */
+.goal .g-name.g-year { font-family: var(--font-num); font-size: 15px; letter-spacing: .04em; font-variant-numeric: lining-nums; }
+.goal .g-sub { font-size: 13px; color: var(--faint); margin-top: -6px; }
 
 .streak-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: var(--r-pill); background: rgba(255,143,120,.12); color: var(--coral); font-weight: 800; font-size: 14px; }
 .streak-chip svg { width: 18px; height: 18px; fill: currentColor; stroke: none; }
@@ -490,6 +505,36 @@ button.fact .v::after { content: " ›"; color: var(--faint); }
 .settings-list .red { color: var(--danger); }
 .callout { padding: 14px 16px; border-radius: var(--r-md); background: rgba(246,192,101,.1); color: #f3d9a8; font-size: 14px; border: 1px solid rgba(246,192,101,.25); }
 .callout b { color: var(--gold); }
+
+/* ---------- Goal reached celebration ---------- */
+.celebrate {
+  position: fixed; inset: 0; z-index: 90; display: grid; place-items: center;
+  padding: calc(env(safe-area-inset-top, 0px) + 24px) var(--gutter-r) calc(env(safe-area-inset-bottom, 0px) + 24px) var(--gutter-l);
+  background: radial-gradient(120% 80% at 50% 30%, #22397a 0%, #0a1530 55%, #071026 100%);
+  opacity: 0; transition: opacity .3s ease;
+}
+.celebrate.show { opacity: 1; }
+.celebrate .confetti { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.celebrate-card {
+  position: relative; width: min(420px, 100%); display: flex; flex-direction: column; align-items: center; gap: 14px;
+  text-align: center; transform: scale(.9) translateY(12px); transition: transform .45s cubic-bezier(.2, 1.4, .4, 1);
+}
+.celebrate.show .celebrate-card { transform: none; }
+.celebrate-badge {
+  width: 104px; height: 104px; border-radius: 50%; display: grid; place-items: center; color: var(--gold-ink);
+  background: radial-gradient(circle at 35% 30%, #ffe0a3, var(--gold) 60%, #e9a94a);
+  box-shadow: 0 0 0 10px rgba(246, 192, 101, .14), 0 0 60px rgba(246, 192, 101, .45);
+  animation: badge-pop .7s cubic-bezier(.2, 1.6, .4, 1) .1s both;
+}
+.celebrate-badge svg { width: 52px; height: 52px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+@keyframes badge-pop { from { transform: scale(.3) rotate(-20deg); opacity: 0; } }
+.celebrate-card h2 { margin: 8px 0 0; font-family: var(--font-book); font-size: 38px; line-height: 1.1; font-weight: 600; }
+.celebrate-sub { margin: -6px 0 4px; color: var(--muted); font-size: 17px; }
+.celebrate-list { width: 100%; display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.celebrate-item { display: flex; align-items: center; gap: 14px; text-align: left; padding: 14px 16px; border-radius: var(--r-md); background: rgba(18, 33, 74, .85); border: 1px solid var(--line); }
+.celebrate-item .dot { width: 14px; height: 14px; border-radius: 50%; flex: none; background: var(--c); box-shadow: 0 0 12px var(--c); }
+.celebrate-item b { display: block; font-size: 16px; }
+.celebrate-item span:not(.dot) { color: var(--muted); font-size: 14px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

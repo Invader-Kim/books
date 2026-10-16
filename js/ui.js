@@ -102,7 +102,7 @@ export function openSheet(inner, { onClose } = {}) {
   document.body.appendChild(wrap);
   sheets.push({ wrap, onClose });
   requestAnimationFrame(() => requestAnimationFrame(() => wrap.classList.add('open')));
-  document.body.style.overflow = 'hidden';
+  document.getElementById('app').style.overflow = 'hidden';
   const sheet = wrap.querySelector('.sheet');
   const first = sheet.querySelector('[autofocus]');
   if (first) setTimeout(() => first.focus(), 320);
@@ -113,7 +113,7 @@ export function closeSheet() {
   if (!s) return;
   s.wrap.classList.remove('open');
   setTimeout(() => s.wrap.remove(), 280);
-  if (!sheets.length) document.body.style.overflow = '';
+  if (!sheets.length) document.getElementById('app').style.overflow = '';
   if (s.onClose) s.onClose();
 }
 export function closeAllSheets() { while (sheets.length) closeSheet(); }

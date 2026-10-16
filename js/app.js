@@ -14,9 +14,13 @@ import { byDay, streaks, speed, bookTotals, minutesOn, finishedIn, yearTotals, h
 import { searchBooks, completeResult, lookupIsbn, lookupForBook, extractIsbn, isOnline, cleanIsbn } from './lookup.js';
 import { startScanner, stopScanner, scanImageFile } from './scanner.js';
 import { loadSamples, removeSamples, hasSamples } from './sample.js';
+import { checkGoals, primeCelebrations, showCelebration } from './celebrate.js';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const view = document.getElementById('view');
+// The page scrolls inside #app (not the whole document) so the tab bar stays
+// pinned to the bottom of the screen on iPhone.
+const scroller = document.getElementById('app');
 const timerBar = document.getElementById('timer-bar');
 
 const ui = {
@@ -55,7 +59,7 @@ function scheduleRender() {
 }
 
 function render(keepScroll = false) {
-  const y = window.scrollY;
+  const y = scroller.scrollTop;
   const { name, id } = ui.route;
   let html = '';
   switch (name) {
@@ -72,7 +76,7 @@ function render(keepScroll = false) {
   view.innerHTML = html;
   const tab = { book: 'library', collection: 'collections', timer: 'home' }[name] || name;
   document.querySelectorAll('#tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
-  window.scrollTo(0, keepScroll ? y : 0);
+  scroller.scrollTop = keepScroll ? y : 0;
   renderTimerBar();
   tick();
 }
@@ -146,7 +150,7 @@ function viewHome() {
   return `
   <div class="hello">
     <div class="eyebrow">${esc(now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }))}</div>
-    <h1>${greeting()}</h1>
+    <h1>${greeting()}${store.data.settings.name ? `, <span class="hello-name">${esc(store.data.settings.name)}</span>` : ''}</h1>
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 6px">
     ${st.current ? `<a class="streak-chip" href="#/stats" data-nav>${icon('flame')}${st.current}-day streak${st.readToday ? '' : ' · read today to keep it'}</a>` : (d.logs.length ? `<span class="streak-chip">${icon('flame')}Start a new streak today</span>` : '')}
@@ -162,7 +166,7 @@ function viewHome() {
   <div class="goals">
     <button class="goal" data-act="edit-goals">${ringHtml(todayMin, g.dailyMinutes, { label: Math.round(todayMin), small: `of ${g.dailyMinutes} min` })}<div class="g-name">Today</div></button>
     <button class="goal" data-act="edit-goals">${ringHtml(monthDone, g.monthlyBooks, { label: monthDone, small: `of ${g.monthlyBooks}`, cls: 'teal' })}<div class="g-name">${esc(now.toLocaleDateString(undefined, { month: 'long' }))}</div><div class="g-sub">books</div></button>
-    <button class="goal" data-act="edit-goals">${ringHtml(yearDone, g.yearlyBooks, { label: yearDone, small: `of ${g.yearlyBooks}`, cls: 'sky' })}<div class="g-name">${now.getFullYear()}</div><div class="g-sub">books</div></button>
+    <button class="goal" data-act="edit-goals">${ringHtml(yearDone, g.yearlyBooks, { label: yearDone, small: `of ${g.yearlyBooks}`, cls: 'sky' })}<div class="g-name g-year">${now.getFullYear()}</div><div class="g-sub">books</div></button>
   </div>
   ${fab('add-book', 'Add a book')}`;
 }
@@ -492,6 +496,11 @@ function viewSettings() {
   const g = d.goals;
   return `
   <div class="page-head"><h1>Settings</h1></div>
+  <h2 class="section">You</h2>
+  <div class="settings-list">
+    <button data-act="edit-name"><span class="grow">Your name</span><span class="val">${d.settings.name ? esc(d.settings.name) : 'Add'}</span></button>
+  </div>
+
   <h2 class="section">Reading goals</h2>
   <div class="settings-list">
     <button data-act="edit-goals"><span class="grow">Daily reading time</span><span class="val num">${g.dailyMinutes} min</span></button>
@@ -768,7 +777,7 @@ function bookFormSheet(initial, { isNew = false, fromDb = false, note = '' } = {
     <label class="field"><span>Title</span><input class="input" id="bf-title" name="title" value="${esc(b.title)}" required></label>
     <label class="field"><span>Subtitle</span><input class="input" id="bf-subtitle" name="subtitle" value="${esc(b.subtitle)}"></label>
     <label class="field"><span>Author(s)</span><input class="input" id="bf-authors" name="authors" value="${esc(b.authors)}" placeholder="Separate with commas"></label>
-    <label class="field"><span>About</span><textarea class="input" id="bf-about" name="about" placeholder="What is it about?">${esc(b.about)}</textarea></label>
+    <label class="field"><span>About</span><textarea class="input about-input" id="bf-about" name="about" placeholder="What is it about?" data-autogrow>${esc(b.about)}</textarea></label>
     <div class="grid-2">
       <label class="field"><span>Pages</span><input class="input num" id="bf-pages" name="pages" type="number" inputmode="numeric" min="0" value="${esc(b.pages ?? '')}"></label>
       <label class="field"><span>Track progress by</span><select class="input" id="bf-mode" name="progressMode"><option value="pages" ${b.progressMode !== 'percent' ? 'selected' : ''}>Pages</option><option value="percent" ${b.progressMode === 'percent' ? 'selected' : ''}>Percent</option></select></label>
@@ -796,6 +805,7 @@ function bookFormSheet(initial, { isNew = false, fromDb = false, note = '' } = {
 
   const form = sheet.querySelector('#book-form');
   const $ = (sel) => sheet.querySelector(sel);
+  autogrow($('#bf-about'));
   const refreshCover = () => {
     $('#cover-preview').innerHTML = coverHtml({ title: $('#bf-title').value || 'Untitled', authors: $('#bf-authors').value, cover }, 'md');
     $('#cover-remove').hidden = !cover;
@@ -844,6 +854,7 @@ function bookFormSheet(initial, { isNew = false, fromDb = false, note = '' } = {
       fill('#bf-title', r.title); fill('#bf-subtitle', r.subtitle); fill('#bf-authors', r.authors); fill('#bf-about', r.about);
       fill('#bf-pages', r.pages ? String(r.pages) : ''); fill('#bf-genres', (r.genres || []).join(', ')); fill('#bf-isbn', r.isbn);
       fill('#bf-published', r.published); fill('#bf-publisher', r.publisher);
+      autogrow($('#bf-about'));
       if (!cover && r.cover) { cover = r.cover; filled += 1; refreshCover(); }
       syncGenreChips();
       toast(filled ? `Filled in ${plural(filled, 'field')}` : 'Nothing was missing that the databases knew');
@@ -1143,6 +1154,36 @@ function quickPickSheet(bookId, field) {
 }
 
 // ======================================================================
+// Sheet: your name (asked once on first open, editable in Settings)
+// ======================================================================
+function nameSheet({ welcome = false } = {}) {
+  const cur = store.data.settings.name || '';
+  const markAsked = () => { if (!store.data.settings.askedName) { store.data.settings.askedName = true; store.save(); } };
+  const sheet = openSheet(`${sheetHead(welcome ? 'Welcome to Lamplight' : 'Your name')}
+    <form id="name-form" class="form" autocomplete="off">
+      <p class="muted" style="margin:-6px 4px 0">${welcome ? 'What should we call you? Your name goes next to the greeting on the home screen.' : 'Shown next to the greeting on the home screen.'}</p>
+      <label class="field"><span>Your name</span><input class="input" id="nm-name" value="${esc(cur)}" placeholder="e.g. Kim" maxlength="40" autocapitalize="words" enterkeyhint="done" autofocus></label>
+      <button class="btn primary block" type="submit">${welcome ? 'Continue' : 'Save'}</button>
+      ${welcome ? '<button type="button" class="btn ghost block" data-act="close-sheet">Skip for now</button>' : ''}
+    </form>`, { onClose: markAsked });
+  sheet.querySelector('#name-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    store.data.settings.name = sheet.querySelector('#nm-name').value.trim().replace(/\s+/g, ' ');
+    store.data.settings.askedName = true;
+    store.save();
+    closeSheet();
+    if (store.data.settings.name) toast(`Nice to meet you, ${store.data.settings.name}`);
+  });
+}
+
+/** Grow a textarea to fit its text, so long descriptions don't need inner scrolling. */
+function autogrow(el) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight + 2}px`;
+}
+
+// ======================================================================
 // Backup
 // ======================================================================
 async function exportData() {
@@ -1177,6 +1218,7 @@ async function importData(file) {
     const ok = await confirmSheet({ title: 'Restore this backup?', message: `It has ${plural(data.books.length, 'book')}. Everything currently in the app will be replaced.`, confirm: 'Restore', danger: true });
     if (!ok) return;
     store.replaceAll(data);
+    primeCelebrations();
     await store.flush();
     toast('Backup restored');
     render();
@@ -1256,6 +1298,7 @@ const actions = {
     toast('Removed from collection');
   },
   'edit-goals': () => goalsSheet(),
+  'edit-name': () => nameSheet(),
   'lib-status': (el) => { ui.lib.status = el.dataset.status; render(true); },
   'lib-filter': (el, e) => { e.preventDefault(); ui.lib = { ...ui.lib, status: el.dataset.status, q: '' }; go('#/library'); },
   'clear-filters': () => { ui.lib = { q: '', status: 'all', own: 'all', format: 'all', genre: 'all', sort: ui.lib.sort }; render(true); },
@@ -1270,7 +1313,7 @@ const actions = {
   'remove-samples': async () => { if (await confirmSheet({ title: 'Remove example books?', message: 'Your own books stay put.', confirm: 'Remove' })) { removeSamples(); toast('Examples removed'); } },
   'erase-all': async () => {
     if (await confirmSheet({ title: 'Erase everything?', message: 'Every book, note, session and collection on this phone will be deleted. Save a backup first if you might want it back.', confirm: 'Erase everything' })) {
-      store.replaceAll(null); await store.flush(); toast('All data erased'); go('#/home');
+      store.replaceAll(null); primeCelebrations(); await store.flush(); toast('All data erased'); go('#/home');
     }
   },
 };
@@ -1286,12 +1329,13 @@ document.addEventListener('click', (e) => {
   if (nav && nav.getAttribute('href') && nav.getAttribute('href').startsWith('#')) {
     e.preventDefault();
     const href = nav.getAttribute('href');
-    if (nav.closest('#tabbar')) { ui.navDepth = 0; if (location.hash !== href) location.hash = href; else window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    if (nav.closest('#tabbar')) { ui.navDepth = 0; if (location.hash !== href) location.hash = href; else scroller.scrollTo({ top: 0, behavior: 'smooth' }); }
     else go(href);
   }
 });
 
 document.addEventListener('input', (e) => {
+  if (e.target.matches && e.target.matches('textarea[data-autogrow]')) autogrow(e.target);
   if (e.target.dataset.input === 'lib-search') {
     ui.lib.q = e.target.value;
     const list = document.getElementById('lib-list');
@@ -1352,6 +1396,12 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', () => store.flush());
 
+// iOS can leave the page nudged up after the keyboard closes; snap it back.
+document.addEventListener('focusout', (e) => {
+  if (!e.target.matches || !e.target.matches('input, textarea, select')) return;
+  setTimeout(() => { if (!document.activeElement || !document.activeElement.matches('input, textarea, select')) window.scrollTo(0, 0); }, 60);
+});
+
 // ======================================================================
 // Offline support (service worker) and start-up
 // ======================================================================
@@ -1375,8 +1425,11 @@ function registerSW() {
 async function start() {
   await store.load();
   store.listeners.add(scheduleRender);
+  store.listeners.add(checkGoals);
   ui.route = parseRoute();
   render();
+  checkGoals();
+  if (!store.data.settings.askedName && !PREVIEW) setTimeout(() => nameSheet({ welcome: true }), 500);
   registerSW();
   // settings screen shows whether storage is protected
   new MutationObserver(() => showPersistState()).observe(view, { childList: true });
@@ -1385,4 +1438,4 @@ async function start() {
 start();
 
 // exposed for testing in the browser console
-window.lamplight = { store, render };
+window.lamplight = { store, render, celebrate: () => showCelebration([{ title: 'Daily reading goal', text: 'This is a test of the celebration screen.', color: 'var(--gold)' }], store.data.settings.name) };

@@ -28,7 +28,7 @@ export function defaultState() {
     logs: [],
     goals: { dailyMinutes: 30, monthlyBooks: 2, yearlyBooks: 24 },
     active: null,
-    settings: { lastBackup: null },
+    settings: { lastBackup: null, name: '', askedName: false },
   };
 }
 
