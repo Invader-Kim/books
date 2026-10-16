@@ -43,26 +43,17 @@
   --gutter-l: max(16px, env(safe-area-inset-left, 0px));
   --gutter-r: max(16px, env(safe-area-inset-right, 0px));
   --tabbar-h: 64px;
-  --tabbar-bg: #08132c;
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
-/* see fitTabbar() in app.js */
-html.short-viewport { --safe-bottom: 0px; }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
-/* anything below the page (if iOS leaves a strip) matches the tab bar */
-html { background: var(--tabbar-bg); }
-/* The document itself never scrolls; #app is the scroll area. This keeps the
-   tab bar pinned to the very bottom on iPhone (iOS can otherwise leave it
-   floating above a gap after the keyboard has been open). */
-html, body { height: 100%; overflow: hidden; }
 body {
   font-family: var(--font-ui);
   font-size: 16px;
   line-height: 1.45;
+  min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
-  overscroll-behavior: none;
+  overscroll-behavior-y: none;
 }
 body::before {
   content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px);
@@ -76,31 +67,25 @@ img { max-width: 100%; display: block; }
 :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: var(--r-sm); }
 svg { stroke-linecap: round; stroke-linejoin: round; }
 
-#app {
-  position: fixed; inset: 0;
-  overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch;
-  overscroll-behavior-y: none;
-}
+#app { max-width: 620px; margin: 0 auto; position: relative; }
 #view {
-  max-width: 620px; margin: 0 auto;
   padding-top: calc(env(safe-area-inset-top, 0px) + 12px);
-  padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 96px);
+  padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 96px);
   padding-left: var(--gutter-l);
   padding-right: var(--gutter-r);
   outline: none;
-  min-height: 100%;
+  min-height: 100dvh;
 }
 
 /* ---------- Tab bar ---------- */
 #tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
   display: flex; justify-content: center;
-  padding: 6px var(--gutter-r) calc(var(--safe-bottom) + 6px) var(--gutter-l);
-  background: var(--tabbar-bg);
+  padding: 6px var(--gutter-r) calc(env(safe-area-inset-bottom, 0px) + 6px) var(--gutter-l);
+  background: rgba(7, 16, 38, 0.86);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
   border-top: 1px solid var(--line);
 }
-/* safety net: the bar's color continues past the bottom edge, so no strip of page shows below it */
-#tabbar::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 120px; background: inherit; }
 #tabbar a {
   flex: 1; max-width: 120px; display: flex; flex-direction: column; align-items: center; gap: 2px;
   padding: 6px 0; color: var(--faint); font-size: 11px; font-weight: 600; border-radius: var(--r-md);
@@ -111,7 +96,7 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
 /* ---------- Timer mini bar ---------- */
 #timer-bar {
   position: fixed; z-index: 19; left: 50%; transform: translateX(-50%);
-  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 10px);
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 10px);
   width: min(588px, calc(100% - 32px));
   display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 16px;
   background: var(--gold); color: var(--gold-ink); border-radius: var(--r-pill);
@@ -163,12 +148,12 @@ h2.section a, h2.section button { text-transform: none; letter-spacing: 0; font-
 .fab {
   position: fixed; z-index: 18; width: 60px; height: 60px; border-radius: 50%; border: 0;
   right: max(calc(50% - 294px), calc(env(safe-area-inset-right, 0px) + 18px));
-  bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 18px);
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 18px);
   background: var(--gold); color: var(--gold-ink); box-shadow: var(--shadow);
   display: grid; place-items: center;
 }
 .fab svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 2.4; }
-body.timer-on .fab { bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 84px); }
+body.timer-on .fab { bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 84px); }
 
 /* ---------- Cards ---------- */
 .card { background: var(--surface); border-radius: var(--r-lg); padding: 18px; border: 1px solid var(--line); }
@@ -283,7 +268,7 @@ input[type="date"].input { min-height: 48px; }
   position: relative; width: 100%; max-width: 620px; max-height: calc(100dvh - env(safe-area-inset-top, 0px) - 24px);
   overflow-y: auto; overscroll-behavior: contain; background: var(--surface);
   border-radius: var(--r-lg) var(--r-lg) 0 0; border: 1px solid var(--line); border-bottom: 0;
-  padding: 10px var(--gutter-r) calc(var(--safe-bottom) + 22px) var(--gutter-l);
+  padding: 10px var(--gutter-r) calc(env(safe-area-inset-bottom, 0px) + 22px) var(--gutter-l);
   transform: translateY(100%); transition: transform .3s cubic-bezier(.2,.8,.2,1);
 }
 .sheet-wrap.open .sheet { transform: none; }
@@ -520,7 +505,7 @@ button.fact .v::after { content: " ›"; color: var(--faint); }
 .callout b { color: var(--gold); }
 
 /* ---------- Opened from the widget in Safari ---------- */
-.safari-note { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 6px; padding: calc(env(safe-area-inset-top, 0px) + 32px) 28px 48px; max-width: 460px; margin: 0 auto; }
+.safari-note { min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 6px; padding: calc(env(safe-area-inset-top, 0px) + 32px) 28px 48px; max-width: 460px; margin: 0 auto; }
 .safari-note .sn-icon img { width: 88px; height: 88px; border-radius: 22px; box-shadow: var(--shadow); margin-bottom: 14px; }
 .safari-note h1 { font-family: var(--font-book); font-size: 28px; line-height: 1.15; font-weight: 600; margin: 0 0 6px; text-wrap: balance; }
 .safari-note p { margin: 0 0 8px; color: var(--text); line-height: 1.5; }
@@ -529,7 +514,7 @@ button.fact .v::after { content: " ›"; color: var(--faint); }
 /* ---------- Goal reached celebration ---------- */
 .celebrate {
   position: fixed; inset: 0; z-index: 90; display: grid; place-items: center;
-  padding: calc(env(safe-area-inset-top, 0px) + 24px) var(--gutter-r) calc(var(--safe-bottom) + 24px) var(--gutter-l);
+  padding: calc(env(safe-area-inset-top, 0px) + 24px) var(--gutter-r) calc(env(safe-area-inset-bottom, 0px) + 24px) var(--gutter-l);
   background: radial-gradient(120% 80% at 50% 30%, #22397a 0%, #0a1530 55%, #071026 100%);
   opacity: 0; transition: opacity .3s ease;
 }

@@ -5,7 +5,7 @@
 // phones pick up the new copy. A new version installs itself straight away
 // (no "Update" button needed) and the app reloads into it.
 
-const VERSION = 'lamplight-v1.4.0';
+const VERSION = 'lamplight-v1.5.0';
 const APP_CACHE = `${VERSION}-app`;
 const COVER_CACHE = 'lamplight-covers';
 
@@ -77,7 +77,7 @@ self.addEventListener('fetch', (event) => {
         const res = await fetch(req);
         if (res && (res.ok || res.type === 'opaque')) cache.put(req, res.clone());
         return res;
-      } catch (e) {
+      } catch {
         return hit || Response.error();
       }
     })());

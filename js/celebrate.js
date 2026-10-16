@@ -1,8 +1,8 @@
 // celebrate.js: the "goal reached" screen with fullscreen confetti.
-// After every change, Lamplight checks your three goals (today's minutes, this
-// month's books, this year's books). The first time one is met in its period,
-// a full-screen celebration appears. Each goal celebrates once per day / month /
-// year, remembered in store.data.settings.celebrated.
+// After every change, Lamplight checks your two goals (today's minutes and this
+// year's books). The first time one is met in its period, a full-screen
+// celebration appears. Each goal celebrates once per day / year, remembered in
+// store.data.settings.celebrated.
 import { store, todayKey, yearlyGoal } from './store.js';
 import { minutesOn, finishedIn } from './stats.js';
 import { hasSamples } from './sample.js';

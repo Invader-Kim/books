@@ -9,9 +9,9 @@ const fm = FileManager.local();
 const DATA_PATH = fm.joinPath(fm.documentsDirectory(), 'lamplight-widget.json');
 
 const C = {
-  bg: new Color('#0a1530'), bg2: new Color('#12214a'), track: new Color('#071026'),
+  bg: new Color('#0a1530'), track: new Color('#071026'),
   text: new Color('#eaf0ff'), muted: new Color('#9fb0d6'), faint: new Color('#6f80a8'),
-  gold: new Color('#f6c065'), teal: new Color('#62d6c4'), sky: new Color('#7fb8ff'), coral: new Color('#ff8f78'),
+  gold: new Color('#f6c065'), sky: new Color('#7fb8ff'), coral: new Color('#ff8f78'),
 };
 
 // ---------- receive data from Lamplight ----------
@@ -26,10 +26,10 @@ if (incoming) {
     a.message = 'Your Lamplight widget will refresh shortly. Tap "◀ Lamplight" at the top-left to go back.';
     a.addAction('Done');
     await a.presentAlert();
-  } catch (e) {
+  } catch (err) {
     const a = new Alert();
     a.title = "Couldn't read the data";
-    a.message = String(e);
+    a.message = String(err);
     a.addAction('OK');
     await a.presentAlert();
   }
@@ -41,15 +41,13 @@ function load() {
 }
 const pad = (n) => String(n).padStart(2, '0');
 function keys(d = new Date()) {
-  return { day: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, month: `${d.getFullYear()}-${pad(d.getMonth() + 1)}`, year: String(d.getFullYear()) };
+  return { day: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, year: String(d.getFullYear()) };
 }
 /** Numbers saved yesterday shouldn't show as today's, so reset anything from an older period. */
 function current(d) {
   const k = keys();
   return {
     todayMin: d.day === k.day ? d.todayMin : 0,
-    readToday: d.day === k.day ? d.readToday : false,
-    monthDone: d.month === k.month ? d.monthDone : 0,
     yearDone: d.year === k.year ? d.yearDone : 0,
     // a streak saved today or yesterday can still be alive; anything older has lapsed
     streak: (d.day === k.day || d.day === keys(new Date(Date.now() - 864e5)).day) ? d.streak : 0,
@@ -235,7 +233,6 @@ async function build() {
   const ringSize = 46;
   const addGoals = (parent, size) => {
     goalStack(parent, 'Today', n.todayMin, d.dailyGoal, ' min', C.gold, size);
-    if (d.monthGoal) { parent.addSpacer(8); goalStack(parent, d.monthName || 'Month', n.monthDone, d.monthGoal, '', C.teal, size); }
     parent.addSpacer(8);
     goalStack(parent, d.year || 'Year', n.yearDone, d.yearGoal, '', C.sky, size);
   };

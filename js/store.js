@@ -142,6 +142,7 @@ export function rememberEdition(book) {
   if (k.length < 10) return;
   const e = {};
   ED_FIELDS.forEach((f) => { if (book[f] != null && book[f] !== '') e[f] = book[f]; });
+  if (e.pages != null) e.pages = numOrNull(e.pages);
   store.data.editions[k] = e;
 }
 /** Overlay what you saved before for this ISBN, so the same book always comes back the same. */

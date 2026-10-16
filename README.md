@@ -53,6 +53,9 @@ Your books are stored in the app's private storage on the phone. Deleting the ap
 | `js/stats.js` | Streaks, daily totals, reading speed, yearly numbers |
 | `js/ui.js` | Shared pieces: covers, stars, rings, pop-up sheets, messages |
 | `js/sample.js` | The optional example books |
+| `js/celebrate.js` | The full-screen "Goal reached" celebration with confetti |
+| `widget/lamplight-widget.js` | The small script you paste into the Scriptable app for the Home Screen widget |
+| `widget/lamplight-widget-core.js` | The widget itself; the pasted script downloads it, so widget fixes need no re-paste |
 | `sw.js` | The service worker: saves the app on the phone so it opens offline, and keeps book covers |
 | `manifest.webmanifest` | Name, icon and colors used when installed |
 | `vendor/html5-qrcode.min.js` | Open-source barcode reader (Apache 2.0 license, included) |
@@ -61,9 +64,9 @@ Your books are stored in the app's private storage on the phone. Deleting the ap
 ## Changing the app later
 
 1. Edit the files (or ask Claude to).
-2. Open `sw.js` and change `VERSION` (e.g. `lamplight-v1.0.1`). This tells phones there is a new copy.
-3. Upload the changed files to the same place (drag the folder onto your Netlify site's **Deploys** page, or upload to GitHub again).
-4. Next time you open the app with internet, a message says **A new version is ready**. Tap **Update**. Your books are untouched.
+2. Open `sw.js` and change `VERSION` (e.g. `lamplight-v1.5.1`), and `APP_VERSION` at the top of `js/app.js` to match. This tells phones there is a new copy.
+3. Upload the changed files to the same place (or push them to the GitHub repo).
+4. Next time you open the app with internet, it updates itself and reloads once. If it doesn't, swipe it away in the app switcher and open it again. The version number is at the bottom of Settings. Your books are untouched.
 
 ## Good to know
 
@@ -72,4 +75,14 @@ Your books are stored in the app's private storage on the phone. Deleting the ap
 - **Some books aren't in either database**, or have wrong page counts. Every field can be edited by hand, and you can add your own cover photo.
 - **Reading speed** uses sessions or progress updates that include both time and pages.
 - **Streaks** count any day with logged reading. If you haven't read yet today, yesterday still keeps the streak alive.
-- **Goals:** books count toward a month or year by their finish date.
+- **Goals:** daily reading minutes and books per year. Books count toward the year they were finished. Reaching a goal shows a celebration, once per day or year.
+- **Your name** is asked on first launch and can be changed in Settings.
+- **Book details stay put.** Details you save are remembered by ISBN, so deleting and re-adding a book brings back your corrections.
+
+## Home Screen widget
+
+Apple only lets App Store apps make widgets, so Lamplight's widget runs in the free **Scriptable** app. Steps are in **Settings › iPhone widget**: copy the widget script, paste it into a new Scriptable script named **Lamplight Widget**, add a Scriptable widget to your Home Screen and pick that script, then tap **Update widget** in Lamplight whenever you want fresh numbers. Tapping the widget opens Safari, not the Home Screen app (an iOS limit); Safari shows a note pointing back to the app.
+
+## Known iOS quirk
+
+On some iOS 26 versions the tab bar sits slightly above the bottom edge in the Home Screen app. This comes from iOS sizing web apps short of the screen and can't be fixed from the app.

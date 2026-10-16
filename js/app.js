@@ -1,6 +1,6 @@
 // app.js: the screens, navigation and everything you tap.
 import {
-  store, STATUSES, FORMATS, OWNERSHIP, COLL_COLORS, statusLabel, todayKey, dateKey, parseKey,
+  store, STATUSES, FORMATS, OWNERSHIP, COLL_COLORS, statusLabel, todayKey,
   getBook, addBook, updateBook, deleteBook, findByIsbn, progressPct, pagePos, recordProgress, deleteLog,
   addNote, updateNote, deleteNote, getCollection, addCollection, updateCollection, deleteCollection,
   setBookCollections, collectionsOf, startSession, sessionElapsed, pauseSession, resumeSession,
@@ -16,11 +16,8 @@ import { startScanner, stopScanner, scanImageFile } from './scanner.js';
 import { loadSamples, removeSamples, hasSamples } from './sample.js';
 import { checkGoals, primeCelebrations, showCelebration } from './celebrate.js';
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 const view = document.getElementById('view');
-// The page scrolls inside #app (not the whole document) so the tab bar stays
-// pinned to the bottom of the screen on iPhone.
-const scroller = document.getElementById('app');
 const timerBar = document.getElementById('timer-bar');
 
 const ui = {
@@ -59,7 +56,7 @@ function scheduleRender() {
 }
 
 function render(keepScroll = false) {
-  const y = scroller.scrollTop;
+  const y = window.scrollY;
   const { name, id } = ui.route;
   let html = '';
   switch (name) {
@@ -76,7 +73,7 @@ function render(keepScroll = false) {
   view.innerHTML = html;
   const tab = { book: 'library', collection: 'collections', timer: 'home' }[name] || name;
   document.querySelectorAll('#tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
-  scroller.scrollTop = keepScroll ? y : 0;
+  window.scrollTo(0, keepScroll ? y : 0);
   renderTimerBar();
   tick();
 }
@@ -1236,9 +1233,8 @@ function widgetData() {
     }));
   return {
     v: 1, updatedAt: now.toISOString(), name: d.settings.name || '',
-    day: todayKey(), month: todayKey().slice(0, 7), year: String(now.getFullYear()),
-    monthName: now.toLocaleDateString(undefined, { month: 'short' }),
-    todayMin: Math.round(minutesOn(todayKey())), dailyGoal: g.dailyMinutes, readToday: !!st.readToday, streak: st.current || 0,
+    day: todayKey(), year: String(now.getFullYear()),
+    todayMin: Math.round(minutesOn(todayKey())), dailyGoal: g.dailyMinutes, streak: st.current || 0,
     yearDone: finishedIn(now.getFullYear(), null).length, yearGoal: yearlyGoal(),
     reading,
   };
@@ -1408,7 +1404,7 @@ document.addEventListener('click', (e) => {
   if (nav && nav.getAttribute('href') && nav.getAttribute('href').startsWith('#')) {
     e.preventDefault();
     const href = nav.getAttribute('href');
-    if (nav.closest('#tabbar')) { ui.navDepth = 0; if (location.hash !== href) location.hash = href; else scroller.scrollTo({ top: 0, behavior: 'smooth' }); }
+    if (nav.closest('#tabbar')) { ui.navDepth = 0; if (location.hash !== href) location.hash = href; else window.scrollTo({ top: 0, behavior: 'smooth' }); }
     else go(href);
   }
 });
@@ -1475,11 +1471,6 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', () => store.flush());
 
-// iOS can leave the page nudged up after the keyboard closes; snap it back.
-document.addEventListener('focusout', (e) => {
-  if (!e.target.matches || !e.target.matches('input, textarea, select')) return;
-  setTimeout(() => { if (!document.activeElement || !document.activeElement.matches('input, textarea, select')) window.scrollTo(0, 0); }, 60);
-});
 
 // ======================================================================
 // Offline support (service worker) and start-up
@@ -1504,26 +1495,6 @@ function registerSW() {
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) reloadWhenIdle(); });
 }
 
-// ======================================================================
-// Tab bar fit (iPhone)
-// ======================================================================
-// Some iOS versions give home-screen web apps a page that stops short of the
-// bottom of the screen, while still reporting the home-indicator inset. The tab
-// bar then adds that inset on top of the gap and floats. When the page is short,
-// drop the inset so the bar sits as low as iOS allows.
-function fitTabbar() {
-  const standalone = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
-  const portrait = window.innerHeight >= window.innerWidth;
-  const screenH = portrait ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
-  const gap = screenH - window.innerHeight;
-  const focusedField = document.activeElement && document.activeElement.matches && document.activeElement.matches('input, textarea, select');
-  if (focusedField) return; // the keyboard changes sizes; decide again once it closes
-  document.documentElement.classList.toggle('short-viewport', standalone && gap > 20);
-}
-window.addEventListener('resize', fitTabbar);
-window.addEventListener('orientationchange', () => setTimeout(fitTabbar, 300));
-document.addEventListener('focusout', () => setTimeout(fitTabbar, 400));
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(fitTabbar, 200); });
 
 /** Tapping the widget opens Safari (iOS won't open Home Screen web apps from a
  *  widget). Safari keeps a separate, empty library, so say where the real one is. */
@@ -1541,7 +1512,6 @@ function widgetInSafariNote() {
 
 async function start() {
   if (widgetInSafariNote()) return;
-  fitTabbar();
   await store.load();
   store.listeners.add(scheduleRender);
   store.listeners.add(checkGoals);
@@ -1557,4 +1527,4 @@ async function start() {
 start();
 
 // exposed for testing in the browser console
-window.lamplight = { store, render, version: APP_VERSION, widgetData: () => widgetData(), celebrate: () => showCelebration([{ title: 'Daily reading goal', text: 'This is a test of the celebration screen.', color: 'var(--gold)' }], store.data.settings.name) };
+window.lamplight = { store, render, version: APP_VERSION, widgetData, celebrate: () => showCelebration([{ title: 'Daily reading goal', text: 'This is a test of the celebration screen.', color: 'var(--gold)' }], store.data.settings.name) };
