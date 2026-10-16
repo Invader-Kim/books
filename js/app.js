@@ -16,7 +16,7 @@ import { startScanner, stopScanner, scanImageFile } from './scanner.js';
 import { loadSamples, removeSamples, hasSamples } from './sample.js';
 import { checkGoals, primeCelebrations, showCelebration } from './celebrate.js';
 
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.9.0';
 const view = document.getElementById('view');
 const timerBar = document.getElementById('timer-bar');
 
@@ -191,6 +191,7 @@ function readingCard(b, single) {
       ${isActive ? `<a class="btn primary small" href="#/timer" data-nav>${icon('clock')}<span data-clock>${fmtClock(sessionElapsed())}</span></a>`
         : `<button class="btn primary small" data-act="start-session" data-id="${b.id}">${icon('play')}Start session</button>`}
       <button class="btn small" data-act="update-progress" data-id="${b.id}">Update progress</button>
+      ${isEbook(b) ? `<button class="btn small icon-only" data-act="read-in-books" data-id="${b.id}" aria-label="Read in Apple Books">${icon('book')}</button>` : ''}
     </div>
   </div>`;
 }
@@ -326,6 +327,7 @@ function viewBook(id) {
       ${isActive ? `<a class="btn primary" href="#/timer" data-nav>${icon('clock')}<span data-clock>${fmtClock(sessionElapsed())}</span></a>`
         : `<button class="btn primary" data-act="start-session" data-id="${b.id}">${icon('play')}Start reading session</button>`}
       <button class="btn" data-act="update-progress" data-id="${b.id}">Update progress</button>
+      ${isEbook(b) ? `<button class="btn ghost" data-act="read-in-books" data-id="${b.id}">${icon('book')}Read in Apple Books</button>` : ''}
     </div>
   </div>
 
@@ -557,6 +559,33 @@ function viewSettings() {
     <button data-act="edit-name"><span class="grow">Your name</span><span class="val">${d.settings.name ? esc(d.settings.name) : 'Add'}</span></button>
   </div>
 
+  <h2 class="section">Apple Books</h2>
+  <div class="settings-list">
+    <label class="settings-toggle"><span class="grow">Open Apple Books when I start a session<br><span class="faint small">For books with the format Ebook</span></span>
+      <span class="switch"><input type="checkbox" data-change="books-on-start" ${d.settings.openBooksOnStart !== false ? 'checked' : ''}><i></i></span></label>
+    <div><span class="grow">Read in Books opens</span>
+      <select class="input compact" data-change="books-mode" aria-label="Read in Books opens">
+        <option value="library" ${d.settings.booksMode !== 'shortcut' ? 'selected' : ''}>Your Books library</option>
+        <option value="shortcut" ${d.settings.booksMode === 'shortcut' ? 'selected' : ''}>The book (shortcut)</option>
+      </select></div>
+    <div><span class="grow">Format for new books</span>
+      <select class="input compact" data-change="default-format" aria-label="Format for new books">${FORMATS.map((f) => `<option ${f === defaultFormat() ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select></div>
+  </div>
+  ${d.settings.booksMode === 'shortcut' ? `<div class="card small muted widget-help" style="margin-top:12px">
+    <p>Apple doesn't let apps link straight to EPUBs and PDFs you added to Books, so a small shortcut finds the book for you. Set it up once:</p>
+    <ol>
+      <li>Open the <b>Shortcuts</b> app and tap <b>+</b>.</li>
+      <li>Tap <b>Add Action</b>, search for <b>Search in Books</b> and add it.</li>
+      <li>Tap the blue search box in that action and choose <b>Shortcut Input</b>.</li>
+      <li>Tap the name at the top, rename it exactly <b>${esc(BOOKS_SHORTCUT)}</b>, then tap <b>Done</b>.</li>
+      <li>Back here, tap <b>Test</b>. The first time, iOS asks for permission; choose <b>Always Allow</b>.</li>
+    </ol>
+    <p style="margin-top:8px">Books opens showing that book, one tap from reading. If a PDF has a different name in Books, put that name in the book's <b>Name in Apple Books</b> field.</p>
+  </div>` : ''}
+  <div class="settings-list" style="margin-top:12px">
+    <button data-act="test-books"><span class="grow">Test with a book</span><span class="val">Open Books</span></button>
+  </div>
+
   <h2 class="section">Search</h2>
   <div class="settings-list">
     <label class="settings-toggle"><span class="grow">English editions only<br><span class="faint small">Search and lookups stick to English books</span></span>
@@ -651,6 +680,7 @@ function viewTimer() {
       ${a.pausedAt ? `<button class="btn big" data-act="timer-resume">${icon('play')}Resume</button>` : `<button class="btn big" data-act="timer-pause">${icon('pause')}Pause</button>`}
       <button class="btn primary big" data-act="timer-finish">${icon('stop')}Finish</button>
     </div>
+    ${isEbook(b) ? `<button class="btn ghost" data-act="read-in-books" data-id="${b.id}">${icon('book')}Back to the book in Apple Books</button>` : ''}
     <label class="toggle-line"><span><b>Keep screen on</b><br><span class="muted small">Stops the phone from dimming while you read</span></span>
       <span class="switch"><input type="checkbox" id="wake-toggle" data-change="wake" ${ui.wantWake ? 'checked' : ''}><i></i></span></label>
     <button class="link-btn" data-act="timer-cancel" style="color:var(--faint)">Discard this session</button>
@@ -791,7 +821,7 @@ async function quickAddResult(i) {
   ui.search.busy.add(i); refreshResults();
   let full = r;
   try { full = await completeResult(r, { englishOnly: englishOnly() }); } catch (e) { /* keep what the search gave us */ }
-  const book = addBook({ ...applyEdition(full), status: ui.qaStatus });
+  const book = addBook({ format: defaultFormat(), ...applyEdition(full), status: ui.qaStatus });
   requestPersist();
   ui.search.busy.delete(i); refreshResults();
   toast(`Added "${book.title}"`, { action: 'View', onAction: () => go(`#/book/${book.id}`) });
@@ -856,7 +886,7 @@ function scanSheet() {
       let r = null;
       if (isOnline()) { try { r = await lookupIsbn(isbn); } catch (e) { r = null; } }
       const details = r ? applyEdition(r) : applyEdition({ isbn, title: `ISBN ${isbn}` });
-      const book = addBook({ ...details, isbn: details.isbn || isbn, status: ui.qaStatus });
+      const book = addBook({ format: defaultFormat(), ...details, isbn: details.isbn || isbn, status: ui.qaStatus });
       requestPersist();
       addedTitles.push(book.title);
       const list = sheet.querySelector('#scan-added');
@@ -936,7 +966,7 @@ function scanSheet() {
 function bookFormSheet(initial, { isNew = false, fromDb = false, note = '', stay = false } = {}) {
   // a book you've added before comes back with the details you saved for it
   if (isNew && initial && initial.isbn) initial = applyEdition(initial);
-  const b = { title: '', subtitle: '', authors: '', about: '', pages: '', genres: [], format: 'Paperback', ownership: 'Owned', status: 'toread', isbn: '', publisher: '', published: '', startedAt: '', finishedAt: '', progressMode: 'pages', cover: '', ...initial };
+  const b = { title: '', subtitle: '', authors: '', about: '', pages: '', genres: [], format: defaultFormat(), ownership: 'Owned', status: 'toread', isbn: '', booksTitle: '', publisher: '', published: '', startedAt: '', finishedAt: '', progressMode: 'pages', cover: '', ...initial };
   let cover = b.cover || '';
   const existingColl = isNew ? [] : collectionsOf(b.id).map((c) => c.id);
   const genres = allGenres();
@@ -968,6 +998,7 @@ function bookFormSheet(initial, { isNew = false, fromDb = false, note = '', stay
       <label class="field"><span>Format</span><select class="input" id="bf-format" name="format">${opt(FORMATS, b.format)}</select></label>
       <label class="field"><span>Ownership</span><select class="input" id="bf-own" name="ownership">${opt(OWNERSHIP, b.ownership)}</select></label>
     </div>
+    <label class="field" id="bf-books-field" ${b.format === 'Ebook' ? '' : 'hidden'}><span>Name in Apple Books (only if different)</span><input class="input" id="bf-books" name="booksTitle" value="${esc(b.booksTitle || '')}" placeholder="e.g. the PDF's file name"></label>
     <label class="field"><span>Reading status</span><select class="input" id="bf-status" name="status">${STATUSES.map((s) => `<option value="${s.id}" ${s.id === b.status ? 'selected' : ''}>${s.label}</option>`).join('')}</select></label>
     <label class="field"><span>Genre</span><input class="input" id="bf-genres" name="genres" value="${esc((b.genres || []).join(', '))}" placeholder="e.g. Fantasy, Romance"></label>
     ${genres.length ? `<div class="genre-suggest" id="genre-suggest">${genres.map((g) => `<button type="button" data-genre="${esc(g)}">${esc(g)}</button>`).join('')}</div>` : ''}
@@ -988,6 +1019,7 @@ function bookFormSheet(initial, { isNew = false, fromDb = false, note = '', stay
   const form = sheet.querySelector('#book-form');
   const $ = (sel) => sheet.querySelector(sel);
   autogrow($('#bf-about'));
+  $('#bf-format').addEventListener('change', (e) => { $('#bf-books-field').hidden = e.target.value !== 'Ebook'; });
   const refreshCover = () => {
     $('#cover-preview').innerHTML = coverHtml({ title: $('#bf-title').value || 'Untitled', authors: $('#bf-authors').value, cover }, 'md');
     $('#cover-remove').hidden = !cover;
@@ -1058,6 +1090,7 @@ function bookFormSheet(initial, { isNew = false, fromDb = false, note = '', stay
       genres: fd.get('genres').split(',').map((x) => x.trim()).filter(Boolean),
       startedAt: fd.get('startedAt'), finishedAt: fd.get('finishedAt'), isbn: fd.get('isbn').trim(),
       published: fd.get('published').trim(), publisher: fd.get('publisher').trim(), cover,
+      booksTitle: (fd.get('booksTitle') || '').trim(),
     };
     const colls = fd.getAll('coll');
     if (!data.title) { toast('A title is needed'); return; }
@@ -1421,13 +1454,37 @@ function updateWidget() {
   store.save();
   store.flush();
   const url = `scriptable:///run/${encodeURIComponent(WIDGET_SCRIPT_NAME)}?data=${encodeURIComponent(JSON.stringify(widgetData()))}`;
-  location.href = url;
+  lamplightApi.openApp(url);
 }
 
 /** After saving reading, offer a one-tap widget refresh once the widget is set up. */
 function savedToast(msg) {
   if (store.data.settings.widgetUpdated) toast(msg, { action: 'Update widget', onAction: updateWidget });
   else toast(msg);
+}
+
+// ======================================================================
+// Apple Books
+// ======================================================================
+// Books opens with ibooks://. Apple offers no link to a specific EPUB or PDF you
+// added yourself, so "the book" mode runs a Shortcut (set up once, see Settings)
+// that searches your Books library for the title.
+const BOOKS_SHORTCUT = 'Open in Books';
+const isEbook = (b) => b && b.format === 'Ebook';
+const defaultFormat = () => (FORMATS.includes(store.data.settings.defaultFormat) ? store.data.settings.defaultFormat : 'Paperback');
+
+/** Leave for another app (Books, Shortcuts, Scriptable). */
+const openApp = (url) => { window.location.href = url; };
+
+function openInBooks(b) {
+  if (PREVIEW) { toast('Opening Apple Books works from your installed copy'); return; }
+  store.flush();
+  if (store.data.settings.booksMode === 'shortcut') {
+    const title = (b.booksTitle || b.title || '').trim();
+    lamplightApi.openApp(`shortcuts://run-shortcut?name=${encodeURIComponent(BOOKS_SHORTCUT)}&input=text&text=${encodeURIComponent(title)}`);
+  } else {
+    lamplightApi.openApp('ibooks://');
+  }
 }
 
 // ======================================================================
@@ -1523,6 +1580,14 @@ const actions = {
     }
     if (!a) startSession(el.dataset.id);
     go('#/timer');
+    const b = getBook(el.dataset.id);
+    if (!a && b && isEbook(b) && store.data.settings.openBooksOnStart) setTimeout(() => openInBooks(b), 450);
+  },
+  'read-in-books': (el) => { const b = getBook(el.dataset.id); if (b) openInBooks(b); },
+  'test-books': () => {
+    const b = store.data.books.find((x) => x.status === 'reading' && isEbook(x)) || store.data.books.find(isEbook) || store.data.books[0];
+    if (!b) { toast('Add a book first, then test'); return; }
+    openInBooks(b);
   },
   'update-progress': (el) => progressSheet(el.dataset.id, { past: !!el.dataset.past }),
   'timer-pause': () => pauseSession(),
@@ -1618,6 +1683,9 @@ document.addEventListener('change', (e) => {
   if (k === 'lib-sort') { ui.lib.sort = e.target.value; store.data.settings.librarySort = ui.lib.sort; store.save(); }
   if (k === 'import' && e.target.files[0]) { importData(e.target.files[0]); e.target.value = ''; }
   if (k === 'wake') setWake(e.target.checked);
+  if (k === 'books-on-start') { store.data.settings.openBooksOnStart = e.target.checked; store.save(); }
+  if (k === 'books-mode') { store.data.settings.booksMode = e.target.value; store.save(); }
+  if (k === 'default-format') { store.data.settings.defaultFormat = e.target.value; store.save(); }
   if (k === 'english-only') { store.data.settings.englishOnly = e.target.checked; store.save(); ui.search.state = 'idle'; ui.search.results = []; }
 });
 
@@ -1808,7 +1876,8 @@ async function start() {
   new MutationObserver(() => showPersistState()).observe(view, { childList: true });
   showPersistState();
 }
-start();
-
 // exposed for testing in the browser console
-window.lamplight = { store, render, version: APP_VERSION, widgetData, celebrate: () => showCelebration([{ title: 'Daily reading goal', text: 'This is a test of the celebration screen.', color: 'var(--gold)' }], store.data.settings.name) };
+const lamplightApi = { store, render, version: APP_VERSION, widgetData, openApp, celebrate: () => showCelebration([{ title: 'Daily reading goal', text: 'This is a test of the celebration screen.', color: 'var(--gold)' }], store.data.settings.name) };
+window.lamplight = lamplightApi;
+
+start();

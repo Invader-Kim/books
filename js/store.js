@@ -32,7 +32,7 @@ export function defaultState() {
     // your own drag-and-drop order for the library (book ids, top first)
     libraryOrder: [],
     active: null,
-    settings: { lastBackup: null, name: '', askedName: false, englishOnly: true, collectionsSort: 'custom' },
+    settings: { lastBackup: null, name: '', askedName: false, englishOnly: true, collectionsSort: 'custom', booksMode: 'library', openBooksOnStart: true, defaultFormat: 'Paperback' },
   };
 }
 
@@ -170,6 +170,7 @@ export function normalizeBook(b) {
     ownership: OWNERSHIP.includes(b.ownership) ? b.ownership : 'Owned',
     status: STATUSES.some((s) => s.id === b.status) ? b.status : 'toread',
     isbn: b.isbn || '',
+    booksTitle: b.booksTitle || '', // the name it has in Apple Books, if different
     publisher: b.publisher || '',
     published: b.published || '',
     rating: clamp(Number(b.rating) || 0, 0, 5),
