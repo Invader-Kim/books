@@ -16,7 +16,7 @@ import { startScanner, stopScanner, scanImageFile } from './scanner.js';
 import { loadSamples, removeSamples, hasSamples } from './sample.js';
 import { checkGoals, primeCelebrations, showCelebration } from './celebrate.js';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 const view = document.getElementById('view');
 // The page scrolls inside #app (not the whole document) so the tab bar stays
 // pinned to the bottom of the screen on iPhone.
@@ -1525,7 +1525,22 @@ window.addEventListener('orientationchange', () => setTimeout(fitTabbar, 300));
 document.addEventListener('focusout', () => setTimeout(fitTabbar, 400));
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(fitTabbar, 200); });
 
+/** Tapping the widget opens Safari (iOS won't open Home Screen web apps from a
+ *  widget). Safari keeps a separate, empty library, so say where the real one is. */
+function widgetInSafariNote() {
+  const standalone = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  if (standalone || !/[?&]from=widget\b/.test(location.search)) return false;
+  document.getElementById('app').innerHTML = `<div class="safari-note">
+    <div class="sn-icon"><img src="icons/apple-touch-icon.png" alt=""></div>
+    <h1>Open Lamplight from your Home Screen</h1>
+    <p>Your library lives in the Lamplight app on your Home Screen. This is Safari, which keeps its own separate, empty copy.</p>
+    <p class="muted small">iPhone widgets can only open Safari for web apps, not the Home Screen app. Close this tab and tap the Lamplight icon instead.</p>
+  </div>`;
+  return true;
+}
+
 async function start() {
+  if (widgetInSafariNote()) return;
   fitTabbar();
   await store.load();
   store.listeners.add(scheduleRender);

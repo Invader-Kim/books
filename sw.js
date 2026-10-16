@@ -5,7 +5,7 @@
 // phones pick up the new copy. A new version installs itself straight away
 // (no "Update" button needed) and the app reloads into it.
 
-const VERSION = 'lamplight-v1.3.0';
+const VERSION = 'lamplight-v1.4.0';
 const APP_CACHE = `${VERSION}-app`;
 const COVER_CACHE = 'lamplight-covers';
 
@@ -23,6 +23,7 @@ const APP_FILES = [
   'js/sample.js',
   'js/celebrate.js',
   'widget/lamplight-widget.js',
+  'widget/lamplight-widget-core.js',
   'vendor/html5-qrcode.min.js',
   'icons/icon-192.png',
   'icons/icon-512.png',

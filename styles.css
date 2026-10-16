@@ -519,6 +519,13 @@ button.fact .v::after { content: " ›"; color: var(--faint); }
 .callout { padding: 14px 16px; border-radius: var(--r-md); background: rgba(246,192,101,.1); color: #f3d9a8; font-size: 14px; border: 1px solid rgba(246,192,101,.25); }
 .callout b { color: var(--gold); }
 
+/* ---------- Opened from the widget in Safari ---------- */
+.safari-note { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 6px; padding: calc(env(safe-area-inset-top, 0px) + 32px) 28px 48px; max-width: 460px; margin: 0 auto; }
+.safari-note .sn-icon img { width: 88px; height: 88px; border-radius: 22px; box-shadow: var(--shadow); margin-bottom: 14px; }
+.safari-note h1 { font-family: var(--font-book); font-size: 28px; line-height: 1.15; font-weight: 600; margin: 0 0 6px; text-wrap: balance; }
+.safari-note p { margin: 0 0 8px; color: var(--text); line-height: 1.5; }
+.safari-note p.muted { color: var(--muted); }
+
 /* ---------- Goal reached celebration ---------- */
 .celebrate {
   position: fixed; inset: 0; z-index: 90; display: grid; place-items: center;
