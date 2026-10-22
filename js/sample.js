@@ -3,7 +3,7 @@
 import { store, normalizeBook, uid, dateKey, todayKey } from './store.js';
 
 const BOOKS = [
-  { title: 'Frankenstein', subtitle: 'or, The Modern Prometheus', authors: 'Mary Shelley', pages: 280, genres: ['Classics', 'Gothic', 'Science Fiction'], format: 'Paperback', ownership: 'Owned', status: 'reading', currentPage: 164, published: '1818',
+  { title: 'Frankenstein', subtitle: 'or, The Modern Prometheus', authors: 'Mary Shelley', pages: 280, genres: ['Classics', 'Horror', 'Science Fiction'], format: 'Paperback', ownership: 'Owned', status: 'reading', currentPage: 164, published: '1818',
     about: 'A young scientist builds a living being from salvaged parts, then abandons it in horror. Told through letters and nested confessions, the story follows creator and creation across Europe and the Arctic as each blames the other for the wreckage of their lives.' },
   { title: 'Pride and Prejudice', authors: 'Jane Austen', pages: 432, genres: ['Classics', 'Romance'], format: 'Hardcover', ownership: 'Owned', status: 'finished', rating: 4.75, published: '1813', finishedDaysAgo: 9,
     about: 'Elizabeth Bennet, quick-witted second of five daughters, keeps colliding with the proud and wealthy Mr. Darcy. A comedy of manners about first impressions, family embarrassment and the slow work of changing your mind.' },
@@ -11,7 +11,7 @@ const BOOKS = [
     about: 'Ishmael signs on to a whaling ship whose captain, Ahab, is fixed on hunting the white whale that took his leg. Part sea story, part encyclopedia of whaling, part meditation on obsession.' },
   { title: 'The Great Gatsby', authors: 'F. Scott Fitzgerald', pages: 180, genres: ['Classics', 'Literary Fiction'], format: 'Audiobook', ownership: 'Borrowed', status: 'reading', progressMode: 'percent', percent: 38, published: '1925',
     about: 'Nick Carraway rents a cottage on Long Island next to the mansion of Jay Gatsby, whose lavish parties hide a single-minded hope of winning back Daisy Buchanan. A short, sharp novel about money, reinvention and the past.' },
-  { title: 'Jane Eyre', authors: 'Charlotte Brontë', pages: 532, genres: ['Classics', 'Gothic', 'Romance'], format: 'Paperback', ownership: 'Not Owned', status: 'wishlist', published: '1847',
+  { title: 'Jane Eyre', authors: 'Charlotte Brontë', pages: 532, genres: ['Classics', 'Romance'], format: 'Paperback', ownership: 'Not Owned', status: 'wishlist', published: '1847',
     about: 'An orphaned governess takes a post at Thornfield Hall and falls for its brooding master, Mr. Rochester, while strange noises echo from the attic. A coming-of-age story driven by a narrator who insists on her own worth.' },
   { title: 'The Odyssey', authors: 'Homer', pages: 541, genres: ['Classics', 'Poetry', 'Mythology'], format: 'Paperback', ownership: 'Owned', status: 'dnf', currentPage: 120, rating: 2.5, published: '-700',
     about: 'After the fall of Troy, Odysseus spends ten years trying to get home to Ithaca, facing monsters, gods and his own crew, while suitors crowd his house and his wife Penelope stalls them.' },

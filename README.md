@@ -53,6 +53,7 @@ Your books are stored in the app's private storage on the phone. Deleting the ap
 | `js/stats.js` | Streaks, daily totals, reading speed, yearly numbers |
 | `js/ui.js` | Shared pieces: covers, stars, rings, pop-up sheets, messages |
 | `js/sample.js` | The optional example books |
+| `js/genres.js` | The genre list, and matching database tags onto it |
 | `js/celebrate.js` | The full-screen "Goal reached" celebration with confetti |
 | `widget/lamplight-widget.js` | The small script you paste into the Scriptable app for the Home Screen widget |
 | `widget/lamplight-widget-core.js` | The widget itself; the pasted script downloads it, so widget fixes need no re-paste |
@@ -81,6 +82,9 @@ Your books are stored in the app's private storage on the phone. Deleting the ap
 - **Adding several books:** in Scan, turn on **Keep scanning** to add a shelf of books one after another.
 - **Where details come from:** Google Books, Open Library and, for anything still missing, Apple Books. Goodreads and Amazon don't let apps read their data, so each book page has links to look it up there.
 - **Library order:** sort by recently added, recently updated, title, author, rating, or **My order**, where you drag books by the ⠿ handle. Your choice is remembered. Collections can be sorted the same way: the Collections tab (my order, name, most books, newest) and the books inside each collection (my order, title, author, recently added, rating, reading status).
+- **Genres** come from one tidy list (Fiction and Nonfiction), plus any you add yourself in the genre picker. Tags from the book databases are matched onto the list.
+- **Re-reading:** a finished book has **Read it again**. Progress starts over, the earlier read stays in the book's stats, and each finish counts toward that year's goal.
+- **Book page:** notes show at the top when a book has any (and a gold dot marks those books in the library), and **Your stats** shows that book's time, sessions, pages, days, pace and how long it took.
 - **Book details stay put.** Details you save are remembered by ISBN, so deleting and re-adding a book brings back your corrections.
 
 ## Home Screen widget

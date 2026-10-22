@@ -69,12 +69,19 @@ export function minutesOn(key) {
   return store.data.logs.filter((l) => l.date === key).reduce((a, l) => a + (l.seconds || 0), 0) / 60;
 }
 
+/** Books finished in a year (and month). A book read twice in that time counts twice. */
 export function finishedIn(year, month /* 0-11 or null */) {
-  return store.data.books.filter((b) => {
-    if (b.status !== 'finished' || !b.finishedAt) return false;
-    const d = parseKey(b.finishedAt);
+  const inRange = (key) => {
+    if (!key) return false;
+    const d = parseKey(key);
     return d.getFullYear() === year && (month == null || d.getMonth() === month);
+  };
+  const out = [];
+  store.data.books.forEach((b) => {
+    (b.reads || []).forEach((r) => { if (r.status === 'finished' && inRange(r.finishedAt)) out.push(b); });
+    if (b.status === 'finished' && inRange(b.finishedAt)) out.push(b);
   });
+  return out;
 }
 
 export function yearTotals(year) {

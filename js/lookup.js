@@ -15,6 +15,8 @@
 // - Each ISBN's answer is remembered for this session, and app.js overlays any
 //   details you saved for that ISBN before (store.editions).
 
+import { toListGenres } from './genres.js';
+
 const TIMEOUT = 12000;
 
 async function getJSON(url) {
@@ -69,27 +71,9 @@ function stripHtml(html) {
   }
 }
 
-function genresFromCategories(cats = []) {
-  const out = [];
-  cats.forEach((c) => String(c).split('/').forEach((p) => {
-    const g = p.trim();
-    if (g && !/^general$/i.test(g) && !out.some((x) => x.toLowerCase() === g.toLowerCase())) out.push(g);
-  }));
-  return out.slice(0, 5);
-}
-
-function genresFromSubjects(subjects = []) {
-  const names = subjects.map((s) => (typeof s === 'string' ? s : s && s.name) || '').filter(Boolean);
-  const skip = /(accessible book|protected daisy|in library|large type|nyt|new york times|reading level|award|staff picks|open library|lending library|overdrive|\d{4})/i;
-  const out = [];
-  names.forEach((n) => {
-    const g = n.replace(/\s*\(.*?\)\s*/g, '').trim();
-    if (g.length > 2 && g.length < 26 && !skip.test(g) && !g.includes(',') && !out.some((x) => x.toLowerCase() === g.toLowerCase())) {
-      out.push(g.charAt(0).toUpperCase() + g.slice(1));
-    }
-  });
-  return out.slice(0, 4);
-}
+// Database tags are translated onto Lamplight's genre list (see genres.js).
+const genresFromCategories = (cats = []) => toListGenres(cats);
+const genresFromSubjects = (subjects = []) => toListGenres(subjects.map((s) => (typeof s === 'string' ? s : (s && s.name) || '')).slice(0, 40));
 
 function httpsCover(url) {
   if (!url) return '';
@@ -220,7 +204,7 @@ function fromApple(it) {
     title: it.trackName || '',
     authors: it.artistName || '',
     about: stripHtml(it.description),
-    genres: (it.genres || []).filter((g) => !/^(books|ebooks?)$/i.test(g)).slice(0, 4),
+    genres: toListGenres(it.genres || []),
     cover: it.artworkUrl100 ? it.artworkUrl100.replace(/\/\d+x\d+(bb)?\.(jpg|png)$/i, '/600x600bb.jpg') : '',
   };
 }

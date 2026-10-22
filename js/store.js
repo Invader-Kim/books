@@ -2,6 +2,8 @@
 // Everything lives in one object (store.data). Every change calls store.save(),
 // which writes it to the phone's storage a moment later.
 
+import { toListGenres } from './genres.js';
+
 export const STATUSES = [
   { id: 'wishlist', label: 'Wishlist' },
   { id: 'toread', label: 'To Read' },
@@ -31,6 +33,9 @@ export function defaultState() {
     editions: {},
     // your own drag-and-drop order for the library (book ids, top first)
     libraryOrder: [],
+    // genres you added to the built-in list (see genres.js)
+    customGenres: [],
+    genresVersion: 2,
     active: null,
     settings: { lastBackup: null, name: '', askedName: false, englishOnly: true, collectionsSort: 'custom' },
   };
@@ -128,8 +133,15 @@ function migrate(d) {
   delete out.goals.monthlyBooks; // the monthly goal was removed in 1.3
   out.editions = d.editions && typeof d.editions === 'object' ? d.editions : {};
   out.libraryOrder = Array.isArray(d.libraryOrder) ? d.libraryOrder : [];
+  out.customGenres = Array.isArray(d.customGenres) ? d.customGenres.filter((g) => typeof g === 'string' && g.trim()) : [];
   out.settings = { ...base.settings, ...(d.settings || {}) };
   out.books = Array.isArray(d.books) ? d.books.map(normalizeBook) : [];
+  // 1.10: genres moved to a fixed list. Translate old free-form genres once;
+  // anything that doesn't fit the list is dropped.
+  if ((d.genresVersion || 1) < 2) {
+    out.books.forEach((b) => { b.genres = toListGenres(b.genres, out.customGenres); });
+    out.genresVersion = 2;
+  }
   out.collections = Array.isArray(d.collections) ? d.collections.map((c) => ({ description: '', color: COLL_COLORS[0], bookIds: [], ...c })) : [];
   out.logs = Array.isArray(d.logs) ? d.logs : [];
   return out;
@@ -179,6 +191,8 @@ export function normalizeBook(b) {
     startedAt: b.startedAt || '',
     finishedAt: b.finishedAt || '',
     notes: Array.isArray(b.notes) ? b.notes : [],
+    // earlier times you read this book: { startedAt, finishedAt, status: 'finished' | 'dnf', rating }
+    reads: Array.isArray(b.reads) ? b.reads : [],
     sample: !!b.sample,
     addedAt: b.addedAt || now,
     updatedAt: b.updatedAt || now,
@@ -223,6 +237,36 @@ function applyStatusDates(b, prev) {
   } else if (prev === 'finished') {
     b.finishedAt = '';
   }
+}
+
+/** How many times you've finished this book, the current read included. */
+export const timesFinished = (b) => b.reads.filter((r) => r.status === 'finished').length + (b.status === 'finished' ? 1 : 0);
+
+/**
+ * Read a finished (or abandoned) book again. The earlier read is kept in
+ * b.reads with its dates, and progress starts over from the beginning.
+ * Returns a copy of the book as it was, for undo.
+ */
+export function startReread(id) {
+  const b = getBook(id);
+  if (!b) return null;
+  const before = JSON.parse(JSON.stringify(b));
+  b.reads.push({ startedAt: b.startedAt || '', finishedAt: b.finishedAt || '', status: b.status === 'dnf' ? 'dnf' : 'finished', rating: b.rating || 0 });
+  b.status = 'reading';
+  b.startedAt = todayKey();
+  b.finishedAt = '';
+  b.currentPage = b.progressMode === 'percent' ? null : 0;
+  b.percent = 0;
+  b.updatedAt = new Date().toISOString();
+  store.save();
+  return before;
+}
+/** Put a book back exactly as a startReread() copy had it (undo). */
+export function restoreBook(copy) {
+  const i = store.data.books.findIndex((b) => b.id === copy.id);
+  if (i === -1) return;
+  store.data.books[i] = normalizeBook(copy);
+  store.save();
 }
 
 export function deleteBook(id) {
